@@ -1,0 +1,172 @@
+import { Injectable, NotFoundException, ForbiddenException } from "@nestjs/common"
+import { InjectModel } from "@nestjs/mongoose"
+import { Model } from "mongoose"
+import { CompanyProfile, type CompanyProfileDocument } from "./schemas/company-profile.schema"
+import { CreateCompanyProfileDto } from "./dto/create-company-profile.dto"
+import { UpdateCompanyProfileDto } from "./dto/update-company-profile.dto"
+
+@Injectable()
+export class CompanyProfileService {
+  constructor(
+    @InjectModel(CompanyProfile.name)
+    private companyProfileModel: Model<CompanyProfileDocument>,
+  ) { }
+
+  async create(buyerId: string, createCompanyProfileDto: CreateCompanyProfileDto): Promise<CompanyProfile> {
+    // Check if the buyer already has a company profile
+    const existingProfile = await this.companyProfileModel.findOne({ buyer: buyerId }).exec()
+    if (existingProfile) {
+      throw new ForbiddenException("Buyer already has a company profile")
+    }
+
+    const newCompanyProfile = new this.companyProfileModel({
+      ...createCompanyProfileDto,
+      buyer: buyerId,
+    })
+
+    return newCompanyProfile.save()
+  }
+
+  async findAll(): Promise<CompanyProfile[]> {
+    return this.companyProfileModel.find().exec()
+  }
+
+  async findOne(id: string): Promise<CompanyProfile> {
+    const companyProfile = await this.companyProfileModel.findById(id).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found")
+    }
+    return companyProfile
+  }
+
+  async findByBuyerId(buyerId: string): Promise<CompanyProfile> {
+    const companyProfile = await this.companyProfileModel.findOne({ buyer: buyerId }).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found for this buyer")
+    }
+    return companyProfile
+  }
+
+  async update(id: string, buyerId: string, updateCompanyProfileDto: UpdateCompanyProfileDto): Promise<CompanyProfile> {
+    // Find profile and verify ownership
+    const companyProfile = await this.companyProfileModel.findById(id).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found")
+    }
+
+    if (companyProfile.buyer.toString() !== buyerId) {
+      throw new ForbiddenException("You do not have permission to update this profile")
+    }
+
+    // Update the profile
+    Object.assign(companyProfile, updateCompanyProfileDto)
+    return companyProfile.save()
+  }
+
+  // Admin can update any profile
+  async updateByAdmin(id: string, updateCompanyProfileDto: UpdateCompanyProfileDto): Promise<CompanyProfile> {
+    const companyProfile = await this.companyProfileModel.findById(id).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found")
+    }
+
+    // Update the profile
+    Object.assign(companyProfile, updateCompanyProfileDto)
+    return companyProfile.save()
+  }
+
+  async remove(id: string, buyerId: string): Promise<void> {
+    // Find profile and verify ownership
+    const companyProfile = await this.companyProfileModel.findById(id).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found")
+    }
+
+    if (companyProfile.buyer.toString() !== buyerId) {
+      throw new ForbiddenException("You do not have permission to delete this profile")
+    }
+
+    await this.companyProfileModel.findByIdAndDelete(id).exec()
+  }
+
+  // Admin can remove any profile
+  async removeByAdmin(id: string): Promise<void> {
+    const result = await this.companyProfileModel.findByIdAndDelete(id).exec()
+    if (!result) {
+      throw new NotFoundException("Company profile not found")
+    }
+  }
+
+  async updateAgreements(
+    buyerId: string,
+    agreements: {
+      termsAndConditionsAccepted?: boolean
+      ndaAccepted?: boolean
+      feeAgreementAccepted?: boolean
+    },
+  ): Promise<CompanyProfile> {
+    const companyProfile = await this.companyProfileModel.findOne({ buyer: buyerId }).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found for this buyer")
+    }
+
+    // Update only the specified agreements
+    if (agreements.termsAndConditionsAccepted !== undefined) {
+      companyProfile.agreements.termsAndConditionsAccepted = agreements.termsAndConditionsAccepted
+    }
+    if (agreements.ndaAccepted !== undefined) {
+      companyProfile.agreements.ndaAccepted = agreements.ndaAccepted
+    }
+    if (agreements.feeAgreementAccepted !== undefined) {
+      companyProfile.agreements.feeAgreementAccepted = agreements.feeAgreementAccepted
+    }
+
+    return companyProfile.save()
+  }
+
+  async updatePreferences(
+    buyerId: string,
+    preferences: {
+      stopSendingDeals?: boolean
+      dontShowMyDeals?: boolean
+      dontSendDealsToMyCompetitors?: boolean
+      allowBuyerLikeDeals?: boolean
+    },
+  ): Promise<CompanyProfile> {
+    const companyProfile = await this.companyProfileModel.findOne({ buyer: buyerId }).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found for this buyer")
+    }
+
+    // Update only the specified preferences
+    if (preferences.stopSendingDeals !== undefined) {
+      companyProfile.preferences.stopSendingDeals = preferences.stopSendingDeals
+    }
+    if (preferences.dontShowMyDeals !== undefined) {
+      companyProfile.preferences.dontShowMyDeals = preferences.dontShowMyDeals
+    }
+    if (preferences.dontSendDealsToMyCompetitors !== undefined) {
+      companyProfile.preferences.dontSendDealsToMyCompetitors = preferences.dontSendDealsToMyCompetitors
+    }
+    if (preferences.allowBuyerLikeDeals !== undefined) {
+      companyProfile.preferences.allowBuyerLikeDeals = preferences.allowBuyerLikeDeals
+    }
+
+    return companyProfile.save()
+  }
+
+  async updateTargetCriteria(buyerId: string, targetCriteria: any): Promise<CompanyProfile> {
+    const companyProfile = await this.companyProfileModel.findOne({ buyer: buyerId }).exec()
+    if (!companyProfile) {
+      throw new NotFoundException("Company profile not found for this buyer")
+    }
+
+    // Merge the existing target criteria with the new values
+    companyProfile.targetCriteria = {
+      ...companyProfile.targetCriteria,
+      ...targetCriteria,
+    }
+
+    return companyProfile.save()
+  }
+}
