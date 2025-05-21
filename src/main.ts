@@ -30,7 +30,7 @@ async function bootstrap() {
     })
 
     // Fix CORS configuration
-    let frontendUrl = process.env.FRONTEND_URL || "https://cim-amp-f.vercel.app/"
+    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000/"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
