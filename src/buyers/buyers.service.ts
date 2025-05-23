@@ -4,16 +4,13 @@ import { Model } from "mongoose"
 import * as bcrypt from "bcrypt"
 import { Buyer, type BuyerDocument } from "./schemas/buyer.schema"
 import { CreateBuyerDto } from "./dto/create-buyer.dto"
+import { UpdateBuyerDto } from "./dto/update-buyer.dto"
 
 @Injectable()
 export class BuyersService {
-  private buyerModel: Model<BuyerDocument>
-
   constructor(
-    @InjectModel(Buyer.name) buyerModel: Model<BuyerDocument>,
-  ) {
-    this.buyerModel = buyerModel;
-  }
+    @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
+  ) {}
 
   async create(createBuyerDto: CreateBuyerDto): Promise<Buyer> {
     const { email, password } = createBuyerDto
@@ -33,6 +30,18 @@ export class BuyersService {
     return newBuyer.save()
   }
 
+  async findAll(): Promise<Buyer[]> {
+    return this.buyerModel.find().exec()
+  }
+
+  async findOne(id: string): Promise<Buyer> {
+    const buyer = await this.buyerModel.findById(id).exec()
+    if (!buyer) {
+      throw new NotFoundException("Buyer not found")
+    }
+    return buyer
+  }
+
   async findByEmail(email: string): Promise<Buyer> {
     const buyer = await this.buyerModel.findOne({ email }).exec()
     if (!buyer) {
@@ -47,6 +56,28 @@ export class BuyersService {
       throw new NotFoundException("Buyer not found")
     }
     return buyer
+  }
+
+  async update(id: string, updateBuyerDto: UpdateBuyerDto): Promise<Buyer> {
+    const buyer = await this.buyerModel.findById(id).exec()
+    if (!buyer) {
+      throw new NotFoundException("Buyer not found")
+    }
+
+    // If password is being updated, hash it
+    if (updateBuyerDto.password) {
+      updateBuyerDto.password = await bcrypt.hash(updateBuyerDto.password, 10)
+    }
+
+    Object.assign(buyer, updateBuyerDto)
+    return buyer.save()
+  }
+
+  async remove(id: string): Promise<void> {
+    const result = await this.buyerModel.findByIdAndDelete(id).exec()
+    if (!result) {
+      throw new NotFoundException("Buyer not found")
+    }
   }
 
   async createFromGoogle(profile: any): Promise<{ buyer: Buyer; isNewUser: boolean }> {

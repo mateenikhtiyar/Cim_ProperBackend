@@ -10,7 +10,9 @@ import {
   Res,
   Query,
   UnauthorizedException,
-  Inject,
+  Patch,
+  Param,
+  Delete,
 } from "@nestjs/common"
 import { FileInterceptor } from "@nestjs/platform-express"
 import { diskStorage } from "multer"
@@ -23,11 +25,12 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { AuthService } from "../auth/auth.service"
 import { LoginBuyerDto } from "./dto/login-buyer.dto"
 import { GoogleLoginResult } from "../auth/interfaces/google-login-result.interface"
-import { DealsService } from "../deals/deals.service" // Import DealsService
+import { DealsService } from "../deals/deals.service"
 
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiConsumes, ApiBody, ApiQuery } from "@nestjs/swagger"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
+import { UpdateBuyerDto } from "./dto/update-buyer.dto"
 
 interface RequestWithUser extends Request {
   user?: {
@@ -43,7 +46,7 @@ export class BuyersController {
   constructor(
     private readonly buyersService: BuyersService,
     private readonly authService: AuthService,
-    @Inject(DealsService) private readonly dealsService: DealsService, // Inject DealsService
+    private readonly dealsService: DealsService,
   ) { }
 
   @Post('register')
@@ -52,7 +55,6 @@ export class BuyersController {
   @ApiResponse({ status: 409, description: 'Email already exists' })
   async register(@Body() createBuyerDto: CreateBuyerDto) {
     const buyer = await this.buyersService.create(createBuyerDto);
-    // Safely handle toObject
     const result = buyer?.toObject ? buyer.toObject() : { ...buyer };
     delete result.password;
     return result;
@@ -89,7 +91,6 @@ export class BuyersController {
 
       const loginResult = (await this.authService.loginWithGoogle(req.user)) as GoogleLoginResult
 
-      // Debug what's actually being returned
       console.log("Login result:", JSON.stringify(loginResult, null, 2))
       console.log("User ID type:", typeof loginResult.user._id)
       console.log("User ID value:", loginResult.user._id)
@@ -97,7 +98,6 @@ export class BuyersController {
       const frontendUrl = process.env.FRONTEND_URL
       const redirectPath = loginResult.isNewUser ? "/acquireprofile" : "/deals"
 
-      // Use a fallback if _id is undefined
       const userId = loginResult.user._id || (loginResult.user as any).id || "missing-id"
 
       const redirectUrl = `${frontendUrl}${redirectPath}?token=${loginResult.access_token}&userId=${userId}`
@@ -110,6 +110,7 @@ export class BuyersController {
       return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent(error.message)}`)
     }
   }
+
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   @ApiBearerAuth()
@@ -143,7 +144,6 @@ export class BuyersController {
       storage: diskStorage({
         destination: "./uploads/profile-pictures",
         filename: (req: any, file, cb) => {
-          // Type cast req as any to access user property safely
           const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
           const ext = extname(file.originalname)
           const userId = req.user?.userId || "unknown"
@@ -168,6 +168,59 @@ export class BuyersController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("admin")
+  @Get()
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get all buyers (Admin only)" })
+  @ApiResponse({ status: 200, description: "Return all buyers." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  findAll() {
+    return this.buyersService.findAll()
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Get("me")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get buyer profile" })
+  @ApiResponse({ status: 200, description: "Return buyer profile." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  getProfileOld(@Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+    return this.buyersService.findOne(req.user.userId);
+  }
+
+  @Get(":id")
+  @ApiOperation({ summary: "Get a buyer by ID" })
+  @ApiResponse({ status: 200, description: "Return the buyer." })
+  findOne(@Param("id") id: string) {
+    return this.buyersService.findOne(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Patch("me")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update buyer profile" })
+  @ApiResponse({ status: 200, description: "The buyer has been successfully updated." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  update(@Request() req: RequestWithUser, @Body() updateBuyerDto: UpdateBuyerDto) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    return this.buyersService.update(req.user.userId, updateBuyerDto)
+  }
+
+  @Delete(":id")
+  @ApiOperation({ summary: "Delete a buyer by ID" })
+  @ApiResponse({ status: 200, description: "The buyer has been successfully deleted." })
+  remove(@Param("id") id: string) {
+    return this.buyersService.remove(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("buyer")
   @Get("deals")
   @ApiBearerAuth()
@@ -178,6 +231,18 @@ export class BuyersController {
     enum: ["pending", "active", "rejected"],
     description: "Filter deals by status",
   })
+  @ApiQuery({
+    name: "page",
+    required: false,
+    type: Number,
+    description: "Page number for pagination",
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: Number,
+    description: "Number of deals per page",
+  })
   @ApiResponse({ status: 200, description: "Return deals for the buyer" })
   @ApiResponse({ status: 401, description: "Unauthorized" })
   async getBuyerDeals(@Request() req: RequestWithUser, @Query('status') status?: 'pending' | 'active' | 'rejected') {
@@ -185,7 +250,6 @@ export class BuyersController {
       throw new UnauthorizedException("User not authenticated")
     }
 
-    // Use the injected DealsService instead of trying to get it from req.app
     return this.dealsService.getBuyerDeals(req.user.userId, status)
   }
 }

@@ -1,15 +1,14 @@
 import { Injectable, NotFoundException, ForbiddenException } from "@nestjs/common"
-import { InjectModel } from "@nestjs/mongoose"
 import { Model } from "mongoose"
 import { Deal, DealDocument, DealStatus } from "./schemas/deal.schema"
 import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
+import { InjectModel } from "@nestjs/mongoose"
 
 @Injectable()
 export class DealsService {
   constructor(
-    @InjectModel(Deal.name)
-    private dealModel: Model<DealDocument>,
+    @InjectModel(Deal.name) private dealModel: Model<DealDocument>
   ) { }
 
   async create(sellerId: string, createDealDto: CreateDealDto): Promise<Deal> {
@@ -70,53 +69,16 @@ export class DealsService {
       throw new NotFoundException(`Deal with ID ${id} not found`)
     }
 
-    // Verify that the seller owns this deal
     if (deal.seller.toString() !== sellerId) {
       throw new ForbiddenException("You don't have permission to update this deal")
     }
 
-    // Check if we're changing status to ACTIVE and update publishedAt timestamp
-    if (updateDealDto.status === DealStatus.ACTIVE && deal.status !== DealStatus.ACTIVE) {
-      deal.timeline.publishedAt = new Date()
-    }
-
-    // Check if we're changing status to COMPLETED and update completedAt timestamp
-    if (updateDealDto.status === DealStatus.COMPLETED && deal.status !== DealStatus.COMPLETED) {
-      deal.timeline.completedAt = new Date()
-    }
-
-    // If finalSalePrice is provided and deal is being completed, add it to financialDetails
-    if (updateDealDto.finalSalePrice && updateDealDto.status === DealStatus.COMPLETED) {
-      deal.financialDetails.finalSalePrice = updateDealDto.finalSalePrice
-      // Remove finalSalePrice from the updateDealDto to avoid duplication
-      delete updateDealDto.finalSalePrice
-    }
-
-    deal.timeline.updatedAt = new Date()
-
-    Object.assign(deal, updateDealDto)
-    return deal.save()
-  }
-
-  async updateByAdmin(id: string, updateDealDto: UpdateDealDto): Promise<Deal> {
-    const deal = await this.dealModel.findById(id).exec()
-
-    if (!deal) {
-      throw new NotFoundException(`Deal with ID ${id} not found`)
-    }
-
-    // Logic for status changes and timestamps same as update method
     if (updateDealDto.status === DealStatus.ACTIVE && deal.status !== DealStatus.ACTIVE) {
       deal.timeline.publishedAt = new Date()
     }
 
     if (updateDealDto.status === DealStatus.COMPLETED && deal.status !== DealStatus.COMPLETED) {
       deal.timeline.completedAt = new Date()
-    }
-
-    if (updateDealDto.finalSalePrice && updateDealDto.status === DealStatus.COMPLETED) {
-      deal.financialDetails.finalSalePrice = updateDealDto.finalSalePrice
-      delete updateDealDto.finalSalePrice
     }
 
     deal.timeline.updatedAt = new Date()
@@ -132,7 +94,6 @@ export class DealsService {
       throw new NotFoundException(`Deal with ID ${id} not found`)
     }
 
-    // Verify that the seller owns this deal
     if (deal.seller.toString() !== sellerId) {
       throw new ForbiddenException("You don't have permission to delete this deal")
     }
@@ -140,150 +101,32 @@ export class DealsService {
     await this.dealModel.findByIdAndDelete(id).exec()
   }
 
-  async removeByAdmin(id: string): Promise<void> {
-    const result = await this.dealModel.findByIdAndDelete(id).exec()
-    if (!result) {
-      throw new NotFoundException(`Deal with ID ${id} not found`)
-    }
-  }
+  async getDealStatistics(sellerId: string): Promise<any> {
+    const deals = await this.dealModel.find({ seller: sellerId }).exec()
 
-  async addInterestedBuyer(dealId: string, buyerId: string): Promise<Deal> {
-    const deal = await this.findOne(dealId)
-
-    if (!deal) {
-      throw new NotFoundException(`Deal with ID ${dealId} not found`)
+    const stats = {
+      totalDeals: deals.length,
+      activeDeals: deals.filter((deal) => deal.status === DealStatus.ACTIVE).length,
+      completedDeals: deals.filter((deal) => deal.status === DealStatus.COMPLETED).length,
+      draftDeals: deals.filter((deal) => deal.status === DealStatus.DRAFT).length,
+      totalInterested: deals.reduce((sum, deal) => sum + deal.interestedBuyers.length, 0),
     }
 
-    // Only allow interest in ACTIVE deals
-    if (deal.status !== DealStatus.ACTIVE) {
-      throw new ForbiddenException("This deal is not currently active")
-    }
-
-    // Check if buyer is already marked as interested
-    if (!deal.interestedBuyers.includes(buyerId)) {
-      deal.interestedBuyers.push(buyerId)
-      await deal.save()
-    }
-
-    return deal
-  }
-
-  async removeInterestedBuyer(dealId: string, buyerId: string): Promise<Deal> {
-    const deal = await this.findOne(dealId)
-
-    if (!deal) {
-      throw new NotFoundException(`Deal with ID ${dealId} not found`)
-    }
-
-    // Remove buyer from interested list
-    deal.interestedBuyers = deal.interestedBuyers.filter((id) => id.toString() !== buyerId)
-
-    await deal.save()
-    return deal
-  }
-
-  async publishDeal(id: string, sellerId: string): Promise<Deal> {
-    const deal = await this.dealModel.findById(id).exec()
-
-    if (!deal) {
-      throw new NotFoundException(`Deal with ID ${id} not found`)
-    }
-
-    // Verify that the seller owns this deal
-    if (deal.seller.toString() !== sellerId) {
-      throw new ForbiddenException("You don't have permission to publish this deal")
-    }
-
-    // Change status to ACTIVE and set publishedAt timestamp
-    deal.status = DealStatus.ACTIVE
-    deal.timeline.publishedAt = new Date()
-    deal.timeline.updatedAt = new Date()
-
-    return deal.save()
-  }
-
-  async completeDeal(id: string, sellerId: string, finalSalePrice: number): Promise<Deal> {
-    const deal = await this.dealModel.findById(id).exec()
-
-    if (!deal) {
-      throw new NotFoundException(`Deal with ID ${id} not found`)
-    }
-
-    // Verify that the seller owns this deal
-    if (deal.seller.toString() !== sellerId) {
-      throw new ForbiddenException("You don't have permission to complete this deal")
-    }
-
-    // Change status to COMPLETED and set completedAt timestamp
-    deal.status = DealStatus.COMPLETED
-    deal.timeline.completedAt = new Date()
-    deal.timeline.updatedAt = new Date()
-    deal.financialDetails.finalSalePrice = finalSalePrice
-
-    return deal.save()
+    return stats
   }
 
   async findMatchingBuyers(dealId: string): Promise<any[]> {
     const deal = await this.findOne(dealId)
 
-    // Build the query to find matching company profiles based on deal criteria
-    const matchQuery: any = {}
-
-    // Match by industry sector if specified
-    if (deal.industrySector) {
-      matchQuery["targetCriteria.industrySectors"] = { $in: [deal.industrySector] }
+    // Basic filter to exclude buyers who have opted out
+    const baseQuery: any = {
+      "preferences.stopSendingDeals": { $ne: true },
     }
 
-    // Match by geography if specified
-    if (deal.geographySelection) {
-      matchQuery["targetCriteria.countries"] = { $in: [deal.geographySelection] }
-    }
-
-    // Match by transaction size if specified in deal
-    if (deal.financialDetails?.askingPrice) {
-      matchQuery["$or"] = [
-        { "targetCriteria.transactionSizeMin": { $lte: deal.financialDetails.askingPrice } },
-        { "targetCriteria.transactionSizeMin": { $exists: false } },
-      ]
-
-      if (deal.financialDetails.askingPrice) {
-        matchQuery["$or"].push(
-          { "targetCriteria.transactionSizeMax": { $gte: deal.financialDetails.askingPrice } },
-          { "targetCriteria.transactionSizeMax": { $exists: false } },
-        )
-      }
-    }
-
-    // Match by years in business if specified
-    if (deal.yearsInBusiness) {
-      matchQuery["$or"] = matchQuery["$or"] || []
-      matchQuery["$or"].push(
-        { "targetCriteria.minYearsInBusiness": { $lte: deal.yearsInBusiness } },
-        { "targetCriteria.minYearsInBusiness": { $exists: false } },
-      )
-    }
-
-    // Match by business model if specified
-    if (deal.businessModel) {
-      const businessModelKeys = Object.keys(deal.businessModel).filter((key) => deal.businessModel[key] === true)
-
-      if (businessModelKeys.length > 0) {
-        matchQuery["$or"] = matchQuery["$or"] || []
-        matchQuery["$or"].push(
-          { "targetCriteria.preferredBusinessModels": { $in: businessModelKeys } },
-          { "targetCriteria.preferredBusinessModels": { $exists: false } },
-        )
-      }
-    }
-
-    // Don't include buyers who have opted out of receiving deals
-    matchQuery["preferences.stopSendingDeals"] = { $ne: true }
-
-    // Use the MongoDB aggregation pipeline to find matching company profiles and their buyers
     const companyProfileModel = this.dealModel.db.model("CompanyProfile")
     const matchingProfiles = await companyProfileModel
       .aggregate([
-        { $match: matchQuery },
+        { $match: baseQuery },
         {
           $lookup: {
             from: "buyers",
@@ -294,6 +137,237 @@ export class DealsService {
         },
         { $unwind: "$buyerInfo" },
         {
+          $addFields: {
+            // Calculate match scores for each criterion
+            industryMatch: {
+              $cond: [
+                { $in: [deal.industrySector, { $ifNull: ["$targetCriteria.industrySectors", []] }] },
+                10, // Points for industry match
+                0,
+              ],
+            },
+            geographyMatch: {
+              $cond: [
+                { $in: [deal.geographySelection, { $ifNull: ["$targetCriteria.countries", []] }] },
+                10, // Points for geography match
+                0,
+              ],
+            },
+            revenueMatch: {
+              $cond: [
+                {
+                  $and: [
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
+                        {
+                          $lte: [
+                            { $ifNull: ["$targetCriteria.revenueMin", 0] },
+                            { $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+                        {
+                          $gte: [
+                            { $ifNull: ["$targetCriteria.revenueMax", 0] },
+                            { $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                8, // Points for revenue match
+                0,
+              ],
+            },
+            ebitdaMatch: {
+              $cond: [
+                {
+                  $and: [
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
+                        {
+                          $lte: [
+                            { $ifNull: ["$targetCriteria.ebitdaMin", 0] },
+                            { $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+                        {
+                          $gte: [
+                            { $ifNull: ["$targetCriteria.ebitdaMax", 0] },
+                            { $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                8, // Points for EBITDA match
+                0,
+              ],
+            },
+            transactionSizeMatch: {
+              $cond: [
+                {
+                  $and: [
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMin", null] }, null] },
+                        {
+                          $lte: [
+                            { $ifNull: ["$targetCriteria.transactionSizeMin", 0] },
+                            { $ifNull: [deal.financialDetails?.askingPrice, 0] },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMax", null] }, null] },
+                        {
+                          $gte: [
+                            { $ifNull: ["$targetCriteria.transactionSizeMax", 0] },
+                            { $ifNull: [deal.financialDetails?.askingPrice, 0] },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                8, // Points for transaction size match
+                0,
+              ],
+            },
+            businessModelMatch: {
+              $sum: [
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.recurringRevenue, false] }, true] },
+                        { $in: ["Recurring Revenue", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+                      ],
+                    },
+                    3, // Points for recurring revenue match
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.projectBased, false] }, true] },
+                        { $in: ["Project-Based", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+                      ],
+                    },
+                    3, // Points for project-based match
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.assetLight, false] }, true] },
+                        { $in: ["Asset Light", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+                      ],
+                    },
+                    3, // Points for asset light match
+                    0,
+                  ],
+                },
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.assetHeavy, false] }, true] },
+                        { $in: ["Asset Heavy", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+                      ],
+                    },
+                    3, // Points for asset heavy match
+                    0,
+                  ],
+                },
+              ],
+            },
+            managementMatch: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: [{ $ifNull: [deal.managementPreferences?.retiringDivesting, false] }, true] },
+                    { $in: ["Owner(s) Departing", { $ifNull: ["$targetCriteria.managementTeamPreference", []] }] },
+                  ],
+                },
+                6, // Points for management preference match
+                0,
+              ],
+            },
+            yearsMatch: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: [{ $ifNull: ["$targetCriteria.minYearsInBusiness", null] }, null] },
+                    { $gte: [deal.yearsInBusiness, { $ifNull: ["$targetCriteria.minYearsInBusiness", 0] }] },
+                  ],
+                },
+                5, // Points for years in business match
+                0,
+              ],
+            },
+          },
+        },
+        {
+          $addFields: {
+            // Calculate total match score
+            totalMatchScore: {
+              $sum: [
+                "$industryMatch",
+                "$geographyMatch",
+                "$revenueMatch",
+                "$ebitdaMatch",
+                "$transactionSizeMatch",
+                "$businessModelMatch",
+                "$managementMatch",
+                "$yearsMatch",
+              ],
+            },
+            // Calculate match percentage (max possible score is 50)
+            matchPercentage: {
+              $multiply: [
+                {
+                  $divide: [
+                    {
+                      $sum: [
+                        "$industryMatch",
+                        "$geographyMatch",
+                        "$revenueMatch",
+                        "$ebitdaMatch",
+                        "$transactionSizeMatch",
+                        "$businessModelMatch",
+                        "$managementMatch",
+                        "$yearsMatch",
+                      ],
+                    },
+                    50, // Maximum possible score
+                  ],
+                },
+                100,
+              ],
+            },
+          },
+        },
+        {
           $project: {
             _id: 1,
             companyName: 1,
@@ -302,8 +376,24 @@ export class DealsService {
             buyerEmail: "$buyerInfo.email",
             targetCriteria: 1,
             preferences: 1,
+            totalMatchScore: 1,
+            matchPercentage: { $round: ["$matchPercentage", 0] },
+            matchDetails: {
+              industryMatch: { $gt: ["$industryMatch", 0] },
+              geographyMatch: { $gt: ["$geographyMatch", 0] },
+              revenueMatch: { $gt: ["$revenueMatch", 0] },
+              ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
+              transactionSizeMatch: { $gt: ["$transactionSizeMatch", 0] },
+              businessModelMatch: { $gt: ["$businessModelMatch", 0] },
+              managementMatch: { $gt: ["$managementMatch", 0] },
+              yearsMatch: { $gt: ["$yearsMatch", 0] },
+            },
           },
         },
+        // Sort by match percentage in descending order
+        { $sort: { matchPercentage: -1 } },
+        // Only include profiles with at least 20% match
+        { $match: { matchPercentage: { $gte: 20 } } },
       ])
       .exec()
 
@@ -313,12 +403,19 @@ export class DealsService {
   async targetDealToBuyers(dealId: string, buyerIds: string[]): Promise<Deal> {
     const deal = await this.findOne(dealId)
 
-    // Add buyers to the targeted list if they're not already there
     const existingTargets = deal.targetedBuyers.map((id) => id.toString())
     const newTargets = buyerIds.filter((id) => !existingTargets.includes(id))
 
     if (newTargets.length > 0) {
       deal.targetedBuyers = [...deal.targetedBuyers, ...newTargets]
+
+      newTargets.forEach((buyerId) => {
+        deal.invitationStatus.set(buyerId, {
+          invitedAt: new Date(),
+          response: "pending",
+        })
+      })
+
       deal.timeline.updatedAt = new Date()
       await deal.save()
     }
@@ -327,43 +424,46 @@ export class DealsService {
   }
 
   async updateDealStatus(dealId: string, buyerId: string, status: "pending" | "active" | "rejected"): Promise<any> {
-    const deal = await this.findOne(dealId)
-
-    // Create a tracking record for this status change
-    const dealTrackingModel = this.dealModel.db.model("DealTracking")
-
-    let interactionType
-    switch (status) {
-      case "active":
-        interactionType = "interest"
-        // Add to interested buyers if not already there
-        if (!deal.interestedBuyers.includes(buyerId)) {
-          deal.interestedBuyers.push(buyerId)
-        }
-        break
-      case "rejected":
-        interactionType = "rejected"
-        // Remove from interested buyers if present
-        deal.interestedBuyers = deal.interestedBuyers.filter((id) => id.toString() !== buyerId)
-        break
-      case "pending":
-        interactionType = "view"
-        break
+    try {
+      const deal = await this.findOne(dealId)
+      const currentInvitation = deal.invitationStatus.get(buyerId)
+      if (currentInvitation) {
+        deal.invitationStatus.set(buyerId, {
+          ...currentInvitation,
+          respondedAt: new Date(),
+          response: status === "active" ? "accepted" : status,
+        })
+      }
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+      let interactionType
+      switch (status) {
+        case "active":
+          interactionType = "interest"
+          if (!deal.interestedBuyers.includes(buyerId)) {
+            deal.interestedBuyers.push(buyerId)
+          }
+          break
+        case "rejected":
+          interactionType = "rejected"
+          deal.interestedBuyers = deal.interestedBuyers.filter((id) => id.toString() !== buyerId)
+          break
+        case "pending":
+          interactionType = "view"
+          break
+      }
+      const tracking = new dealTrackingModel({
+        deal: dealId,
+        buyer: buyerId,
+        interactionType,
+        timestamp: new Date(),
+        metadata: { status, previousStatus: currentInvitation?.response },
+      })
+      await tracking.save()
+      await deal.save()
+      return { deal, tracking }
+    } catch (error) {
+      throw new Error(`Failed to update deal status: ${error.message}`)
     }
-
-    // Create tracking record
-    const tracking = new dealTrackingModel({
-      deal: dealId,
-      buyer: buyerId,
-      interactionType,
-      timestamp: new Date(),
-      metadata: { status },
-    })
-
-    await tracking.save()
-    await deal.save()
-
-    return { deal, tracking }
   }
 
   async getBuyerDeals(buyerId: string, status?: "pending" | "active" | "rejected"): Promise<Deal[]> {
@@ -374,21 +474,46 @@ export class DealsService {
     if (status === "active") {
       query.interestedBuyers = buyerId
     } else if (status === "rejected") {
-      // For rejected, the buyer was targeted but not interested
       query.interestedBuyers = { $ne: buyerId }
     }
 
     return this.dealModel.find(query).exec()
   }
 
+  async getBuyerDealsWithPagination(
+    buyerId: string,
+    status?: "pending" | "active" | "rejected",
+    page = 1,
+    limit = 10,
+  ): Promise<{ deals: Deal[]; total: number; page: number; totalPages: number }> {
+    const query: any = {
+      targetedBuyers: buyerId,
+    }
+
+    if (status === "active") {
+      query.interestedBuyers = buyerId
+    } else if (status === "rejected") {
+      query.interestedBuyers = { $ne: buyerId }
+    }
+
+    const skip = (page - 1) * limit
+    const deals = await this.dealModel.find(query).skip(skip).limit(limit).exec()
+    const total = await this.dealModel.countDocuments(query).exec()
+    const totalPages = Math.ceil(total / limit)
+
+    return {
+      deals,
+      total,
+      page,
+      totalPages,
+    }
+  }
+
   async getDealHistory(sellerId: string): Promise<any[]> {
-    // Get all deals by this seller
     const deals = await this.dealModel.find({ seller: sellerId }).exec()
 
-    // Get all deal IDs
     const dealIds = deals.map((deal) => deal._id)
 
-    // Get tracking information for these deals
     const dealTrackingModel = this.dealModel.db.model("DealTracking")
     const trackingData = await dealTrackingModel
       .aggregate([
@@ -413,6 +538,7 @@ export class DealsService {
         { $unwind: "$dealInfo" },
         {
           $project: {
+            _id: 1,
             dealId: "$deal",
             dealTitle: "$dealInfo.title",
             buyerId: "$buyer",
@@ -428,26 +554,5 @@ export class DealsService {
       .exec()
 
     return trackingData
-  }
-
-  async getProfileVisibility(dealId: string, userId: string, userRole: string): Promise<boolean> {
-    const deal = await this.findOne(dealId)
-
-    // Admin can see all profiles
-    if (userRole === "admin") {
-      return true
-    }
-
-    // Seller can see buyer profile if the buyer is interested in the deal
-    if (userRole === "seller") {
-      return deal.seller.toString() === userId && deal.interestedBuyers.some((id) => id.toString() === userId)
-    }
-
-    // Buyer can see seller profile if they're interested in the deal
-    if (userRole === "buyer") {
-      return deal.interestedBuyers.includes(userId)
-    }
-
-    return false
   }
 }
