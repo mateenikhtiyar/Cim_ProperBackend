@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose"
-import { type Document, Schema as MongooseSchema } from "mongoose"
+import { Document, Schema as MongooseSchema } from "mongoose"
 import { ApiProperty } from "@nestjs/swagger"
 
 export interface CompanyProfileDocument extends CompanyProfile, Document {
@@ -50,9 +50,13 @@ class TargetCriteria {
   @Prop({ type: [String], default: [] })
   industrySectors: string[]
 
-  @ApiProperty({ description: "Revenue", nullable: true })
+  @ApiProperty({ description: "Minimum revenue", nullable: true })
   @Prop({ required: false })
-  revenue: number
+  revenueMin: number
+
+  @ApiProperty({ description: "Maximum revenue", nullable: true })
+  @Prop({ required: false })
+  revenueMax: number
 
   @ApiProperty({ description: "Minimum EBITDA", nullable: true })
   @Prop({ required: false })
@@ -69,6 +73,10 @@ class TargetCriteria {
   @ApiProperty({ description: "Maximum transaction size", nullable: true })
   @Prop({ required: false })
   transactionSizeMax: number
+
+  @ApiProperty({ description: "Revenue growth percentage", nullable: true })
+  @Prop({ required: false })
+  revenueGrowth: number
 
   @ApiProperty({ description: "Minimum stake percentage", nullable: true })
   @Prop({ required: false })

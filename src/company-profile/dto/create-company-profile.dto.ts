@@ -51,10 +51,15 @@ export class TargetCriteriaDto {
   @IsOptional()
   industrySectors?: string[]
 
-  @ApiProperty({ example: 5000000, description: "Revenue", nullable: true })
+  @ApiProperty({ example: 1000000, description: "Minimum revenue", nullable: true })
   @IsNumber()
   @IsOptional()
-  revenue?: number
+  revenueMin?: number
+
+  @ApiProperty({ example: 10000000, description: "Maximum revenue", nullable: true })
+  @IsNumber()
+  @IsOptional()
+  revenueMax?: number
 
   @ApiProperty({ example: 200000, description: "Minimum EBITDA", nullable: true })
   @IsNumber()
@@ -75,6 +80,11 @@ export class TargetCriteriaDto {
   @IsNumber()
   @IsOptional()
   transactionSizeMax?: number
+
+  @ApiProperty({ example: 15, description: "Revenue growth percentage", nullable: true })
+  @IsNumber()
+  @IsOptional()
+  revenueGrowth?: number
 
   @ApiProperty({ example: 51, description: "Minimum stake percentage", nullable: true })
   @IsNumber()
@@ -129,6 +139,9 @@ export class CreateCompanyProfileDto {
   @ApiProperty({ example: "Acme Inc", description: "Company name" })
   @IsString()
   companyName: string
+   @ApiProperty({ description: "Selected currency", example: "USD" })
+   @IsString()
+    selectedCurrency: string
 
   @ApiProperty({ example: "https://acme.com", description: "Company website" })
   @IsUrl()

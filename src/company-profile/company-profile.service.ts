@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, ForbiddenException } from "@nestjs/common"
-import { InjectModel } from "@nestjs/mongoose"
+import { Injectable, NotFoundException, ForbiddenException, Inject } from "@nestjs/common"
 import { Model } from "mongoose"
-import { CompanyProfile, type CompanyProfileDocument } from "./schemas/company-profile.schema"
+import { InjectModel } from "@nestjs/mongoose"
+import { CompanyProfile, CompanyProfileDocument } from "./schemas/company-profile.schema"
 import { CreateCompanyProfileDto } from "./dto/create-company-profile.dto"
 import { UpdateCompanyProfileDto } from "./dto/update-company-profile.dto"
 
@@ -9,7 +9,7 @@ import { UpdateCompanyProfileDto } from "./dto/update-company-profile.dto"
 export class CompanyProfileService {
   constructor(
     @InjectModel(CompanyProfile.name)
-    private companyProfileModel: Model<CompanyProfileDocument>,
+    private companyProfileModel: Model<CompanyProfileDocument>
   ) { }
 
   async create(buyerId: string, createCompanyProfileDto: CreateCompanyProfileDto): Promise<CompanyProfile> {
@@ -19,16 +19,22 @@ export class CompanyProfileService {
       throw new ForbiddenException("Buyer already has a company profile")
     }
 
+    // Ensure the targetCriteria fields are properly initialized
+    const targetCriteria = createCompanyProfileDto.targetCriteria || {}
+    if (!targetCriteria.countries) targetCriteria.countries = []
+    if (!targetCriteria.industrySectors) targetCriteria.industrySectors = []
+    if (!targetCriteria.preferredBusinessModels) targetCriteria.preferredBusinessModels = []
+    if (!targetCriteria.managementTeamPreference) targetCriteria.managementTeamPreference = []
+
+    // Create new profile with properly initialized fields
     const newCompanyProfile = new this.companyProfileModel({
       ...createCompanyProfileDto,
       buyer: buyerId,
+      targetCriteria,
+      selectedCurrency: createCompanyProfileDto.selectedCurrency || "USD",
     })
 
     return newCompanyProfile.save()
-  }
-
-  async findAll(): Promise<CompanyProfile[]> {
-    return this.companyProfileModel.find().exec()
   }
 
   async findOne(id: string): Promise<CompanyProfile> {
@@ -58,20 +64,93 @@ export class CompanyProfileService {
       throw new ForbiddenException("You do not have permission to update this profile")
     }
 
-    // Update the profile
-    Object.assign(companyProfile, updateCompanyProfileDto)
-    return companyProfile.save()
-  }
+    // Handle nested updates properly
+    if (updateCompanyProfileDto.targetCriteria) {
+      // Ensure arrays are properly handled
+      if (updateCompanyProfileDto.targetCriteria.countries) {
+        companyProfile.targetCriteria.countries = updateCompanyProfileDto.targetCriteria.countries
+      }
+      if (updateCompanyProfileDto.targetCriteria.industrySectors) {
+        companyProfile.targetCriteria.industrySectors = updateCompanyProfileDto.targetCriteria.industrySectors
+      }
+      if (updateCompanyProfileDto.targetCriteria.preferredBusinessModels) {
+        companyProfile.targetCriteria.preferredBusinessModels =
+          updateCompanyProfileDto.targetCriteria.preferredBusinessModels
+      }
+      if (updateCompanyProfileDto.targetCriteria.managementTeamPreference) {
+        companyProfile.targetCriteria.managementTeamPreference =
+          updateCompanyProfileDto.targetCriteria.managementTeamPreference
+      }
 
-  // Admin can update any profile
-  async updateByAdmin(id: string, updateCompanyProfileDto: UpdateCompanyProfileDto): Promise<CompanyProfile> {
-    const companyProfile = await this.companyProfileModel.findById(id).exec()
-    if (!companyProfile) {
-      throw new NotFoundException("Company profile not found")
+      // Handle other fields
+      if (updateCompanyProfileDto.targetCriteria.revenueMin !== undefined) {
+        companyProfile.targetCriteria.revenueMin = updateCompanyProfileDto.targetCriteria.revenueMin
+      }
+      if (updateCompanyProfileDto.targetCriteria.revenueMax !== undefined) {
+        companyProfile.targetCriteria.revenueMax = updateCompanyProfileDto.targetCriteria.revenueMax
+      }
+      if (updateCompanyProfileDto.targetCriteria.ebitdaMin !== undefined) {
+        companyProfile.targetCriteria.ebitdaMin = updateCompanyProfileDto.targetCriteria.ebitdaMin
+      }
+      if (updateCompanyProfileDto.targetCriteria.ebitdaMax !== undefined) {
+        companyProfile.targetCriteria.ebitdaMax = updateCompanyProfileDto.targetCriteria.ebitdaMax
+      }
+      if (updateCompanyProfileDto.targetCriteria.transactionSizeMin !== undefined) {
+        companyProfile.targetCriteria.transactionSizeMin = updateCompanyProfileDto.targetCriteria.transactionSizeMin
+      }
+      if (updateCompanyProfileDto.targetCriteria.transactionSizeMax !== undefined) {
+        companyProfile.targetCriteria.transactionSizeMax = updateCompanyProfileDto.targetCriteria.transactionSizeMax
+      }
+      if (updateCompanyProfileDto.targetCriteria.revenueGrowth !== undefined) {
+        companyProfile.targetCriteria.revenueGrowth = updateCompanyProfileDto.targetCriteria.revenueGrowth
+      }
+      if (updateCompanyProfileDto.targetCriteria.minStakePercent !== undefined) {
+        companyProfile.targetCriteria.minStakePercent = updateCompanyProfileDto.targetCriteria.minStakePercent
+      }
+      if (updateCompanyProfileDto.targetCriteria.minYearsInBusiness !== undefined) {
+        companyProfile.targetCriteria.minYearsInBusiness = updateCompanyProfileDto.targetCriteria.minYearsInBusiness
+      }
+      if (updateCompanyProfileDto.targetCriteria.description !== undefined) {
+        companyProfile.targetCriteria.description = updateCompanyProfileDto.targetCriteria.description
+      }
     }
 
-    // Update the profile
-    Object.assign(companyProfile, updateCompanyProfileDto)
+    // Handle other top-level fields
+    if (updateCompanyProfileDto.companyName) {
+      companyProfile.companyName = updateCompanyProfileDto.companyName
+    }
+    if (updateCompanyProfileDto.website) {
+      companyProfile.website = updateCompanyProfileDto.website
+    }
+    if (updateCompanyProfileDto.companyType) {
+      companyProfile.companyType = updateCompanyProfileDto.companyType
+    }
+    if (updateCompanyProfileDto.capitalEntity) {
+      companyProfile.capitalEntity = updateCompanyProfileDto.capitalEntity
+    }
+    if (updateCompanyProfileDto.contacts) {
+      companyProfile.contacts = updateCompanyProfileDto.contacts
+    }
+    if (updateCompanyProfileDto.dealsCompletedLast5Years !== undefined) {
+      companyProfile.dealsCompletedLast5Years = updateCompanyProfileDto.dealsCompletedLast5Years
+    }
+    if (updateCompanyProfileDto.averageDealSize !== undefined) {
+      companyProfile.averageDealSize = updateCompanyProfileDto.averageDealSize
+    }
+    if (updateCompanyProfileDto.selectedCurrency) {
+      companyProfile.selectedCurrency = updateCompanyProfileDto.selectedCurrency
+    }
+
+    // Handle preferences
+    if (updateCompanyProfileDto.preferences) {
+      Object.assign(companyProfile.preferences, updateCompanyProfileDto.preferences)
+    }
+
+    // Handle agreements
+    if (updateCompanyProfileDto.agreements) {
+      Object.assign(companyProfile.agreements, updateCompanyProfileDto.agreements)
+    }
+
     return companyProfile.save()
   }
 
@@ -87,14 +166,6 @@ export class CompanyProfileService {
     }
 
     await this.companyProfileModel.findByIdAndDelete(id).exec()
-  }
-
-  // Admin can remove any profile
-  async removeByAdmin(id: string): Promise<void> {
-    const result = await this.companyProfileModel.findByIdAndDelete(id).exec()
-    if (!result) {
-      throw new NotFoundException("Company profile not found")
-    }
   }
 
   async updateAgreements(

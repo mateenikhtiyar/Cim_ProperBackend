@@ -2,7 +2,7 @@ import { Injectable, Inject, forwardRef, Logger, BadRequestException, Unauthoriz
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { BuyersService } from "../buyers/buyers.service";
-import type { GoogleLoginResult } from "./interfaces/google-login-result.interface";
+import { GoogleLoginResult } from "./interfaces/google-login-result.interface";
 import { AdminService } from "../admin/admin.service";
 import { SellersService } from "../sellers/sellers.service";
 import { GoogleSellerLoginResult } from "./interfaces/google-seller-login-result.interface";

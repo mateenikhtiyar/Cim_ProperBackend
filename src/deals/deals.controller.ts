@@ -9,6 +9,7 @@ import {
   UseGuards,
   Request,
   ForbiddenException,
+  UnauthorizedException,
 } from "@nestjs/common"
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody } from "@nestjs/swagger"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
@@ -18,7 +19,6 @@ import { DealsService } from "./deals.service"
 import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
 import { DealResponseDto } from "./dto/deal-response.dto"
-import { UnauthorizedException } from "@nestjs/common"
 
 interface RequestWithUser extends Request {
   user: {
@@ -40,7 +40,7 @@ export class DealsController {
   @ApiOperation({ summary: "Create a new deal" })
   @ApiResponse({ status: 201, description: "Deal created successfully", type: DealResponseDto })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
-  async create(@Request() req: RequestWithUser, @Body() createDealDto: CreateDealDto) {
+  async create(@Body() createDealDto: CreateDealDto, @Request() req: RequestWithUser) {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
@@ -70,20 +70,6 @@ export class DealsController {
       throw new UnauthorizedException("User not authenticated");
     }
     return this.dealsService.findBySeller(req.user.userId);
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("buyer")
-  @Get("available")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Get all deals available to the buyer" })
-  @ApiResponse({ status: 200, description: "Return available deals", type: [DealResponseDto] })
-  @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
-  async findAvailableForBuyer(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
-    }
-    return this.dealsService.findDealsForBuyer(req.user.userId);
   }
 
   @Get("public")
@@ -137,19 +123,6 @@ export class DealsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("admin")
-  @Patch("admin/:id")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Update a deal (admin only)" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Deal updated successfully", type: DealResponseDto })
-  @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async updateByAdmin(@Param("id") id: string, @Body() updateDealDto: UpdateDealDto) {
-    return this.dealsService.updateByAdmin(id, updateDealDto)
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
   @Delete(":id")
   @ApiBearerAuth()
@@ -167,85 +140,17 @@ export class DealsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("admin")
-  @Delete("admin/:id")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Delete a deal (admin only)" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Deal deleted successfully" })
-  @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async removeByAdmin(@Param("id") id: string) {
-    await this.dealsService.removeByAdmin(id);
-    return { message: "Deal deleted successfully" };
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("buyer")
-  @Post(":id/interest")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Express interest in a deal" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Interest registered successfully", type: DealResponseDto })
-  @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async expressInterest(@Param("id") id: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-    return this.dealsService.addInterestedBuyer(id, req.user.userId)
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("buyer")
-  @Delete(":id/interest")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Remove interest in a deal" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Interest removed successfully", type: DealResponseDto })
-  @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async removeInterest(@Param("id") id: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-    return this.dealsService.removeInterestedBuyer(id, req.user.userId)
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
-  @Post(":id/publish")
+  @Get("statistics")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Publish a deal" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Deal published successfully", type: DealResponseDto })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async publishDeal(@Param("id") id: string, @Request() req: RequestWithUser) {
+  @ApiOperation({ summary: "Get deal statistics for the seller" })
+  @ApiResponse({ status: 200, description: "Return deal statistics" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
+  async getDealStatistics(@Request() req: RequestWithUser) {
     if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
+      throw new UnauthorizedException("User not authenticated");
     }
-    return this.dealsService.publishDeal(id, req.user.userId)
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
-  @Post(":id/complete")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Mark a deal as completed" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Deal marked as completed", type: DealResponseDto })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async completeDeal(
-    @Param("id") id: string,
-    @Request() req: RequestWithUser,
-    @Body() body: { finalSalePrice: number },
-  ) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-    return this.dealsService.completeDeal(id, req.user.userId, body.finalSalePrice)
+    return this.dealsService.getDealStatistics(req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -308,108 +213,5 @@ export class DealsController {
     }
 
     return this.dealsService.targetDealToBuyers(id, body.buyerIds)
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("buyer")
-  @Get("pending")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Get all pending deals for the buyer" })
-  @ApiResponse({ status: 200, description: "Return pending deals" })
-  @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
-  async getPendingDeals(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
-    }
-
-    return this.dealsService.getBuyerDeals(req.user.userId, 'pending');
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("buyer")
-  @Post(":id/respond")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Respond to a deal (accept or reject)" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        status: {
-          type: "string",
-          enum: ["active", "rejected"],
-          description: "Response to the deal",
-        },
-        notes: {
-          type: "string",
-          description: "Optional notes about the decision",
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 200, description: "Response recorded successfully" })
-  @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async respondToDeal(
-    @Param("id") id: string,
-    @Body() body: { status: 'active' | 'rejected', notes?: string },
-    @Request() req: RequestWithUser,
-  ) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-
-    // Verify the buyer is targeted for this deal
-    const deal = await this.dealsService.findOne(id)
-    if (!deal.targetedBuyers.includes(req.user.userId)) {
-      throw new ForbiddenException("You are not targeted for this deal")
-    }
-
-    const result = await this.dealsService.updateDealStatus(id, req.user.userId, body.status)
-
-    // If notes were provided, update the tracking record
-    if (body.notes && result.tracking) {
-      result.tracking.notes = body.notes
-      await result.tracking.save()
-    }
-
-    return { message: `Deal ${body.status === "active" ? "accepted" : "rejected"} successfully` }
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
-  @Get("history")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Get deal history for the seller" })
-  @ApiResponse({ status: 200, description: "Return deal history" })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
-  async getDealHistory(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
-    }
-
-    return this.dealsService.getDealHistory(req.user.userId);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get(":id/can-view-profile/:profileId")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Check if user can view a specific profile" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiParam({ name: "profileId", description: "Profile ID (user ID) to check visibility for" })
-  @ApiResponse({ status: 200, description: "Return visibility status" })
-  @ApiResponse({ status: 403, description: "Forbidden" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async checkProfileVisibility(
-    @Param("id") id: string,
-    @Param("profileId") profileId: string,
-    @Request() req: RequestWithUser,
-  ) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-
-    const canView = await this.dealsService.getProfileVisibility(id, profileId, req.user.role)
-    return { canView }
   }
 }

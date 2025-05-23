@@ -56,4 +56,14 @@ export class UpdateCompanyProfileDto {
   @Type(() => AgreementsDto)
   @IsOptional()
   agreements?: AgreementsDto
+
+  @ApiProperty({ example: "USD", description: "Selected currency" })
+  @IsString()
+  @IsOptional()
+  selectedCurrency?: string
+
+  @ApiProperty({ example: "ready_to_deploy", description: "Capital availability" })
+  @IsString()
+  @IsOptional()
+  capitalAvailability?: string
 }

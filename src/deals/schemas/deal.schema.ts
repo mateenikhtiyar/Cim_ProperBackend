@@ -220,10 +220,38 @@ export class Deal {
   @Prop({ type: [String], default: [] })
   documents!: string[]
 
-  // Additional metadata for search and filtering
   @ApiProperty({ description: "Deal slug for SEO-friendly URLs" })
   @Prop({ required: false })
   slug?: string
+
+  @ApiProperty({ description: "Invitation status for targeted buyers" })
+  @Prop({
+    type: Map,
+    of: {
+      invitedAt: Date,
+      respondedAt: Date,
+      response: String,
+      notes: String,
+    },
+    default: new Map(),
+  })
+  invitationStatus!: Map<
+    string,
+    {
+      invitedAt: Date
+      respondedAt?: Date
+      response: "pending" | "accepted" | "rejected"
+      notes?: string
+    }
+  >
+
+  @ApiProperty({ description: "Deal priority level", enum: ["low", "medium", "high"] })
+  @Prop({ enum: ["low", "medium", "high"], default: "medium" })
+  priority!: string
+
+  @ApiProperty({ description: "Deal expiration date" })
+  @Prop({ required: false })
+  expiresAt?: Date
 }
 
 export const DealSchema = SchemaFactory.createForClass(Deal)

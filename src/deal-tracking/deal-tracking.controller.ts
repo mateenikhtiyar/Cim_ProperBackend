@@ -1,18 +1,15 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Request, Query } from "@nestjs/common"
+import { Controller, Get, Post, Body, Param, UseGuards, Request, Query, UnauthorizedException } from "@nestjs/common"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
 import { DealTrackingService } from "./deal-tracking.service"
 import { CreateDealTrackingDto } from "./dto/create-deal-tracking.dto"
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery } from "@nestjs/swagger"
-import { UnauthorizedException } from "@nestjs/common"
+import { Request as ExpressRequest } from "express"
 
-interface RequestWithUser extends Request {
-  user: {
-    userId: string
-    email: string
-    role: string
-  }
+interface RequestWithUser extends ExpressRequest {
+  user: { userId: string; email: string; role: string }
+  app: any
 }
 
 @ApiTags("deal-tracking")
@@ -27,9 +24,9 @@ export class DealTrackingController {
   @ApiOperation({ summary: "Create a new deal tracking record" })
   @ApiResponse({ status: 201, description: "Record created successfully" })
   @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
-  async create(@Body() createDealTrackingDto: CreateDealTrackingDto, @Request() req: RequestWithUser) {
+  async create(@Body() createDealTrackingDto: CreateDealTrackingDto, @Request() req: RequestWithUser): Promise<any> {
     if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
+      throw new UnauthorizedException("User not authenticated")
     }
     return this.dealTrackingService.create(req.user.userId, createDealTrackingDto)
   }
@@ -93,7 +90,7 @@ export class DealTrackingController {
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
   async getRecentActivity(@Request() req: RequestWithUser, @Query("limit") limit: number = 10) {
     if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
+      throw new UnauthorizedException("User not authenticated")
     }
     return this.dealTrackingService.getRecentActivityForSeller(req.user.userId, limit)
   }
@@ -108,7 +105,7 @@ export class DealTrackingController {
   @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
   async logView(@Request() req: RequestWithUser, @Param("dealId") dealId: string) {
     if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
+      throw new UnauthorizedException("User not authenticated")
     }
     return this.dealTrackingService.logView(dealId, req.user.userId)
   }
@@ -123,7 +120,7 @@ export class DealTrackingController {
   @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
   async logInterest(@Request() req: RequestWithUser, @Param("dealId") dealId: string) {
     if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
+      throw new UnauthorizedException("User not authenticated")
     }
     return this.dealTrackingService.logInterest(dealId, req.user.userId)
   }
@@ -142,7 +139,7 @@ export class DealTrackingController {
     @Body() body: { notes?: string },
   ) {
     if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
+      throw new UnauthorizedException("User not authenticated")
     }
     return this.dealTrackingService.logRejection(dealId, req.user.userId, body.notes)
   }
