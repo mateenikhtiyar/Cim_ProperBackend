@@ -1,13 +1,14 @@
 import { Injectable, NotFoundException } from "@nestjs/common"
-import { InjectModel } from '@nestjs/mongoose';
 import { Model, PipelineStage } from "mongoose"
 import { DealTracking, DealTrackingDocument, InteractionType } from "./schemas/deal-tracking.schema"
 import { CreateDealTrackingDto } from "./dto/create-deal-tracking.dto"
+import { InjectModel } from "@nestjs/mongoose"
 
 @Injectable()
 export class DealTrackingService {
   constructor(
-    @InjectModel(DealTracking.name) private dealTrackingModel: Model<DealTrackingDocument>
+    @InjectModel(DealTracking.name)
+    private dealTrackingModel: Model<DealTrackingDocument>
   ) { }
 
   async create(buyerId: string, createDealTrackingDto: CreateDealTrackingDto): Promise<DealTracking> {
