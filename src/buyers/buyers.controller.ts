@@ -1,7 +1,6 @@
 import {
   Controller,
   Post,
-  Body,
   UseGuards,
   Get,
   Request,
@@ -26,7 +25,6 @@ import { AuthService } from "../auth/auth.service"
 import { LoginBuyerDto } from "./dto/login-buyer.dto"
 import { GoogleLoginResult } from "../auth/interfaces/google-login-result.interface"
 import { DealsService } from "../deals/deals.service"
-
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiConsumes, ApiBody, ApiQuery } from "@nestjs/swagger"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
@@ -49,15 +47,15 @@ export class BuyersController {
     private readonly dealsService: DealsService,
   ) { }
 
-  @Post('register')
-  @ApiOperation({ summary: 'Register a new buyer' })
-  @ApiResponse({ status: 201, description: 'Buyer successfully registered' })
-  @ApiResponse({ status: 409, description: 'Email already exists' })
-  async register(@Body() createBuyerDto: CreateBuyerDto) {
-    const buyer = await this.buyersService.create(createBuyerDto);
-    const result = buyer?.toObject ? buyer.toObject() : { ...buyer };
-    delete result.password;
-    return result;
+  @Post("register")
+  @ApiOperation({ summary: "Register a new buyer" })
+  @ApiResponse({ status: 201, description: "Buyer successfully registered" })
+  @ApiResponse({ status: 409, description: "Email already exists" })
+  async register(createBuyerDto: CreateBuyerDto) {
+    const buyer = await this.buyersService.create(createBuyerDto)
+    const result = buyer?.toObject ? buyer.toObject() : { ...buyer }
+    delete result.password
+    return result
   }
 
   @UseGuards(LocalAuthGuard)
@@ -66,7 +64,7 @@ export class BuyersController {
   @ApiResponse({ status: 200, description: 'Buyer successfully logged in' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiBody({ type: LoginBuyerDto })
-  async login(@Request() req) {
+  async login(@Request() req: any) {
     return this.authService.login(req.user);
   }
 
@@ -82,7 +80,7 @@ export class BuyersController {
   @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: "Google OAuth callback" })
   @ApiResponse({ status: 302, description: "Redirects to frontend with token" })
-  async googleAuthCallback(@Request() req, @Res() res) {
+  async googleAuthCallback(@Request() req: any, @Res() res: any) {
     try {
       if (!req.user) {
         const frontendUrl = process.env.FRONTEND_URL
@@ -117,7 +115,7 @@ export class BuyersController {
   @ApiOperation({ summary: 'Get buyer profile' })
   @ApiResponse({ status: 200, description: 'Buyer profile returned' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  getProfile(@Request() req) {
+  getProfile(@Request() req: any) {
     return this.buyersService.findById(req.user?.userId);
   }
 
@@ -161,15 +159,16 @@ export class BuyersController {
       },
     }),
   )
-  async uploadProfilePicture(@Request() req, @UploadedFile() file) {
+  async uploadProfilePicture(@Request() req: any, @UploadedFile() file: any) {
     const profilePicturePath = file.path
     const buyer = await this.buyersService.updateProfilePicture(req.user?.userId, profilePicturePath)
     return { message: "Profile picture uploaded successfully", profilePicture: profilePicturePath }
   }
 
+  // IMPORTANT: Put specific routes BEFORE parameterized routes
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("admin")
-  @Get()
+  @Get("all") // Changed from empty string to "all" to avoid conflicts
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get all buyers (Admin only)" })
   @ApiResponse({ status: 200, description: "Return all buyers." })
@@ -192,37 +191,9 @@ export class BuyersController {
     return this.buyersService.findOne(req.user.userId);
   }
 
-  @Get(":id")
-  @ApiOperation({ summary: "Get a buyer by ID" })
-  @ApiResponse({ status: 200, description: "Return the buyer." })
-  findOne(@Param("id") id: string) {
-    return this.buyersService.findOne(id);
-  }
-
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("buyer")
-  @Patch("me")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Update buyer profile" })
-  @ApiResponse({ status: 200, description: "The buyer has been successfully updated." })
-  @ApiResponse({ status: 401, description: "Unauthorized." })
-  update(@Request() req: RequestWithUser, @Body() updateBuyerDto: UpdateBuyerDto) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-    return this.buyersService.update(req.user.userId, updateBuyerDto)
-  }
-
-  @Delete(":id")
-  @ApiOperation({ summary: "Delete a buyer by ID" })
-  @ApiResponse({ status: 200, description: "The buyer has been successfully deleted." })
-  remove(@Param("id") id: string) {
-    return this.buyersService.remove(id);
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("buyer")
-  @Get("deals")
+  @Get("deals") // This specific route must come BEFORE the parameterized route
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get all deals for the buyer" })
   @ApiQuery({
@@ -250,6 +221,40 @@ export class BuyersController {
       throw new UnauthorizedException("User not authenticated")
     }
 
-    return this.dealsService.getBuyerDeals(req.user.userId, status)
+    try {
+      return await this.dealsService.getBuyerDeals(req.user.userId, status)
+    } catch (error) {
+      console.error("Error getting buyer deals:", error)
+      throw new Error(`Failed to get buyer deals: ${error.message}`)
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Patch("me")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update buyer profile" })
+  @ApiResponse({ status: 200, description: "The buyer has been successfully updated." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  update(@Request() req: RequestWithUser, updateBuyerDto: UpdateBuyerDto) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    return this.buyersService.update(req.user.userId, updateBuyerDto)
+  }
+
+  // Parameterized routes should come LAST to avoid conflicts
+  @Get(":id")
+  @ApiOperation({ summary: "Get a buyer by ID" })
+  @ApiResponse({ status: 200, description: "Return the buyer." })
+  findOne(@Param("id") id: string) {
+    return this.buyersService.findOne(id);
+  }
+
+  @Delete(":id")
+  @ApiOperation({ summary: "Delete a buyer by ID" })
+  @ApiResponse({ status: 200, description: "The buyer has been successfully deleted." })
+  remove(@Param("id") id: string) {
+    return this.buyersService.remove(id);
   }
 }
