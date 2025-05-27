@@ -1,9 +1,19 @@
 import { Injectable, NotFoundException, ForbiddenException } from "@nestjs/common"
-import { Model } from "mongoose"
-import { Deal, DealDocument, DealStatus } from "./schemas/deal.schema"
+import { Deal, DealDocumentType as DealDocument, DealStatus } from "./schemas/deal.schema"
 import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
+import * as fs from "fs"
+import { Model } from "mongoose"
 import { InjectModel } from "@nestjs/mongoose"
+
+interface DocumentInfo {
+  filename: string
+  originalName: string
+  path: string
+  size: number
+  mimetype: string
+  uploadedAt: Date
+}
 
 @Injectable()
 export class DealsService {
@@ -62,6 +72,47 @@ export class DealsService {
       .exec()
   }
 
+  async addDocuments(dealId: string, documents: DocumentInfo[]): Promise<Deal> {
+    const deal = await this.findOne(dealId)
+
+    // Add new documents to existing ones
+    if (!deal.documents) {
+      deal.documents = []
+    }
+
+    deal.documents.push(...documents)
+    deal.timeline.updatedAt = new Date()
+
+    return deal.save()
+  }
+
+  async removeDocument(dealId: string, documentIndex: number): Promise<Deal> {
+    const deal = await this.findOne(dealId)
+
+    if (!deal.documents || documentIndex < 0 || documentIndex >= deal.documents.length) {
+      throw new NotFoundException("Document not found")
+    }
+
+    // Get the document to remove
+    const documentToRemove = deal.documents[documentIndex]
+
+    // Remove the file from filesystem
+    try {
+      if (fs.existsSync(documentToRemove.path)) {
+        fs.unlinkSync(documentToRemove.path)
+      }
+    } catch (error) {
+      console.error("Error removing file:", error)
+      // Continue even if file removal fails
+    }
+
+    // Remove from array
+    deal.documents.splice(documentIndex, 1)
+    deal.timeline.updatedAt = new Date()
+
+    return deal.save()
+  }
+
   async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promise<Deal> {
     const deal = await this.dealModel.findById(id).exec()
 
@@ -98,6 +149,19 @@ export class DealsService {
       throw new ForbiddenException("You don't have permission to delete this deal")
     }
 
+    // Remove all associated documents from filesystem
+    if (deal.documents && deal.documents.length > 0) {
+      deal.documents.forEach((doc: any) => {
+        try {
+          if (fs.existsSync(doc.path)) {
+            fs.unlinkSync(doc.path)
+          }
+        } catch (error) {
+          console.error("Error removing document file:", error)
+        }
+      })
+    }
+
     await this.dealModel.findByIdAndDelete(id).exec()
   }
 
@@ -110,9 +174,20 @@ export class DealsService {
       completedDeals: deals.filter((deal) => deal.status === DealStatus.COMPLETED).length,
       draftDeals: deals.filter((deal) => deal.status === DealStatus.DRAFT).length,
       totalInterested: deals.reduce((sum, deal) => sum + deal.interestedBuyers.length, 0),
+      totalDocuments: deals.reduce((sum, deal) => sum + (deal.documents?.length || 0), 0),
     }
 
     return stats
+  }
+
+  async getCompletedDeals(sellerId: string): Promise<Deal[]> {
+    return this.dealModel
+      .find({
+        seller: sellerId,
+        status: DealStatus.COMPLETED,
+      })
+      .sort({ "timeline.completedAt": -1 }) // Sort by completion date, newest first
+      .exec()
   }
 
   async findMatchingBuyers(dealId: string): Promise<any[]> {
@@ -466,18 +541,25 @@ export class DealsService {
     }
   }
 
-  async getBuyerDeals(buyerId: string, status?: "pending" | "active" | "rejected"): Promise<Deal[]> {
+  async getBuyerDeals(buyerId: string, status?: "pending" | "active" | "rejected" | "completed"): Promise<Deal[]> {
     const query: any = {
       targetedBuyers: buyerId,
     }
 
     if (status === "active") {
       query.interestedBuyers = buyerId
+      query.status = DealStatus.ACTIVE
     } else if (status === "rejected") {
+      query.interestedBuyers = { $ne: buyerId }
+    } else if (status === "completed") {
+      query.status = DealStatus.COMPLETED
+      query.interestedBuyers = buyerId // Only show completed deals the buyer was interested in
+    } else if (status === "pending") {
+      query.status = DealStatus.ACTIVE
       query.interestedBuyers = { $ne: buyerId }
     }
 
-    return this.dealModel.find(query).exec()
+    return this.dealModel.find(query).sort({ "timeline.updatedAt": -1 }).exec()
   }
 
   async getBuyerDealsWithPagination(
