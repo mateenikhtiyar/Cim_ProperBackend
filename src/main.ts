@@ -1,6 +1,4 @@
-// Import the shims first
 import "./shims"
-
 import { NestFactory } from "@nestjs/core"
 import { ValidationPipe } from "@nestjs/common"
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger"
@@ -10,6 +8,12 @@ import * as fs from "fs"
 async function bootstrap() {
   try {
     const app = await NestFactory.create(AppModule)
+    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000/"
+    // Remove trailing slash if present
+    if (frontendUrl.endsWith("/")) {
+      frontendUrl = frontendUrl.slice(0, -1)
+    }
+
     app.useGlobalPipes(
       new ValidationPipe({
         transform: true,
@@ -22,7 +26,7 @@ async function bootstrap() {
     )
 
     // Ensure uploads directory exists
-    const uploadDirs = ["./uploads", "./uploads/profile-pictures"]
+    const uploadDirs = ["./uploads", "./uploads/profile-pictures", "./uploads/deal-documents"]
     uploadDirs.forEach((dir) => {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true })
@@ -30,12 +34,6 @@ async function bootstrap() {
     })
 
     // Fix CORS configuration
-    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000/"
-    // Remove trailing slash if present
-    if (frontendUrl.endsWith("/")) {
-      frontendUrl = frontendUrl.slice(0, -1)
-    }
-
     app.enableCors({
       origin: frontendUrl,
       credentials: true,

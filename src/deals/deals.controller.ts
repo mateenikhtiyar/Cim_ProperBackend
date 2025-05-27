@@ -10,8 +10,13 @@ import {
   Request,
   ForbiddenException,
   UnauthorizedException,
+  UseInterceptors,
+  UploadedFiles,
 } from "@nestjs/common"
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody } from "@nestjs/swagger"
+import { FilesInterceptor } from "@nestjs/platform-express"
+import { diskStorage } from "multer"
+import { extname } from "path"
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody, ApiConsumes } from "@nestjs/swagger"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
@@ -19,6 +24,7 @@ import { DealsService } from "./deals.service"
 import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
 import { DealResponseDto } from "./dto/deal-response.dto"
+import { Express } from "express"
 
 interface RequestWithUser extends Request {
   user: {
@@ -45,6 +51,123 @@ export class DealsController {
       throw new UnauthorizedException("User not authenticated")
     }
     return this.dealsService.create(req.user.userId, createDealDto)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Post(":id/upload-documents")
+  @ApiBearerAuth()
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "Upload documents for a deal" })
+  @ApiResponse({ status: 200, description: "Documents uploaded successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  @ApiResponse({ status: 404, description: "Deal not found" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        files: {
+          type: "array",
+          items: {
+            type: "string",
+            format: "binary",
+          },
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FilesInterceptor("files", 10, {
+      // Allow up to 10 files
+      storage: diskStorage({
+        destination: "./uploads/deal-documents",
+        filename: (req: any, file, cb) => {
+          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
+          const ext = extname(file.originalname)
+          const dealId = req.params.id
+          const sanitizedOriginalName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")
+          cb(null, `${dealId}_${uniqueSuffix}_${sanitizedOriginalName}`)
+        },
+      }),
+      fileFilter: (req, file, cb) => {
+        // Allow common document types
+        const allowedTypes = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|jpg|jpeg|png|gif)$/i
+        if (!file.originalname.match(allowedTypes)) {
+          return cb(new Error("Only document and image files are allowed!"), false)
+        }
+        cb(null, true)
+      },
+      limits: {
+        fileSize: 1024 * 1024 * 10, // 10MB limit per file
+      },
+    }),
+  )
+  async uploadDocuments(
+    @Param("id") dealId: string,
+    @Request() req: RequestWithUser,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    // Verify the seller owns this deal
+    const deal = await this.dealsService.findOne(dealId)
+    if (deal.seller.toString() !== req.user.userId) {
+      throw new ForbiddenException("You don't have permission to upload documents for this deal")
+    }
+
+    if (!files || files.length === 0) {
+      throw new Error("No files uploaded")
+    }
+
+    const documentPaths = files.map((file) => ({
+      filename: file.filename,
+      originalName: file.originalname,
+      path: file.path,
+      size: file.size,
+      mimetype: file.mimetype,
+      uploadedAt: new Date(),
+    }))
+
+    const updatedDeal = await this.dealsService.addDocuments(dealId, documentPaths)
+
+    return {
+      message: "Documents uploaded successfully",
+      uploadedFiles: documentPaths.length,
+      documents: documentPaths,
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Delete(":id/documents/:documentIndex")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Remove a document from a deal" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiParam({ name: "documentIndex", description: "Index of the document to remove" })
+  @ApiResponse({ status: 200, description: "Document removed successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  @ApiResponse({ status: 404, description: "Deal or document not found" })
+  async removeDocument(
+    @Param("id") dealId: string,
+    @Param("documentIndex") documentIndex: string,
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    // Verify the seller owns this deal
+    const deal = await this.dealsService.findOne(dealId)
+    if (deal.seller.toString() !== req.user.userId) {
+      throw new ForbiddenException("You don't have permission to remove documents from this deal")
+    }
+
+    const index = Number.parseInt(documentIndex, 10)
+    const updatedDeal = await this.dealsService.removeDocument(dealId, index)
+
+    return { message: "Document removed successfully" }
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -77,6 +200,20 @@ export class DealsController {
   @ApiResponse({ status: 200, description: "Return public deals", type: [DealResponseDto] })
   async findPublic() {
     return this.dealsService.findPublicDeals()
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("completed")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get completed deals for the seller" })
+  @ApiResponse({ status: 200, description: "Return completed deals", type: [DealResponseDto] })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
+  async getCompletedDeals(@Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+    return this.dealsService.getCompletedDeals(req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -12,6 +12,7 @@ import {
   Patch,
   Param,
   Delete,
+  Body, // Add this import
 } from "@nestjs/common"
 import { FileInterceptor } from "@nestjs/platform-express"
 import { diskStorage } from "multer"
@@ -51,11 +52,17 @@ export class BuyersController {
   @ApiOperation({ summary: "Register a new buyer" })
   @ApiResponse({ status: 201, description: "Buyer successfully registered" })
   @ApiResponse({ status: 409, description: "Email already exists" })
-  async register(createBuyerDto: CreateBuyerDto) {
-    const buyer = await this.buyersService.create(createBuyerDto)
-    const result = buyer?.toObject ? buyer.toObject() : { ...buyer }
-    delete result.password
-    return result
+  @ApiBody({ type: CreateBuyerDto }) // Add this for better Swagger documentation
+  async register(@Body() createBuyerDto: CreateBuyerDto) { // Add @Body() decorator
+    try {
+      const buyer = await this.buyersService.create(createBuyerDto)
+      const result = buyer?.toObject ? buyer.toObject() : { ...buyer }
+      delete result.password
+      return result
+    } catch (error) {
+      console.error("Registration error:", error)
+      throw error
+    }
   }
 
   @UseGuards(LocalAuthGuard)
@@ -236,7 +243,7 @@ export class BuyersController {
   @ApiOperation({ summary: "Update buyer profile" })
   @ApiResponse({ status: 200, description: "The buyer has been successfully updated." })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  update(@Request() req: RequestWithUser, updateBuyerDto: UpdateBuyerDto) {
+  update(@Request() req: RequestWithUser, @Body() updateBuyerDto: UpdateBuyerDto) { // Add @Body() decorator here too
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }

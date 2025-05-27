@@ -85,7 +85,7 @@ export class SellersController {
       const frontendUrl = this.configService.get<string>("FRONTEND_URL")
 
       // Determine the redirect path based on whether this is a new user
-      const redirectPath = loginResult.isNewUser ? "/seller/complete-profile" : "/seller/dashboard"
+      const redirectPath = loginResult.isNewUser ? "seller/login" : "/seller/login"
 
       // Use a fallback if _id is undefined
       const userId = loginResult.user._id || (loginResult.user as any).id || "missing-id"

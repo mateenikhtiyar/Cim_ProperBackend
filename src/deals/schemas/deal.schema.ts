@@ -1,8 +1,8 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose"
-import { type Document, Schema as MongooseSchema } from "mongoose"
+import { Document, Schema as MongooseSchema } from "mongoose"
 import { ApiProperty } from "@nestjs/swagger"
 
-export type DealDocument = Deal & Document
+export type DealDocumentType = Deal & Document
 
 export enum DealStatus {
   DRAFT = "draft",
@@ -130,6 +130,33 @@ class DealTimeline {
   completedAt?: Date
 }
 
+@Schema()
+class DealDocument {
+  @ApiProperty({ description: "File name on server" })
+  @Prop({ required: true })
+  filename: string
+
+  @ApiProperty({ description: "Original file name" })
+  @Prop({ required: true })
+  originalName: string
+
+  @ApiProperty({ description: "File path on server" })
+  @Prop({ required: true })
+  path: string
+
+  @ApiProperty({ description: "File size in bytes" })
+  @Prop({ required: true })
+  size: number
+
+  @ApiProperty({ description: "MIME type of the file" })
+  @Prop({ required: true })
+  mimetype: string
+
+  @ApiProperty({ description: "Date when the document was uploaded" })
+  @Prop({ default: Date.now })
+  uploadedAt: Date
+}
+
 @Schema({ timestamps: true })
 export class Deal {
   @ApiProperty({ description: "Title of the deal" })
@@ -216,9 +243,9 @@ export class Deal {
   @Prop({ required: false })
   stakePercentage?: number
 
-  @ApiProperty({ description: "Documents uploaded for the deal" })
-  @Prop({ type: [String], default: [] })
-  documents!: string[]
+  @ApiProperty({ description: "Documents uploaded for the deal", type: [DealDocument] })
+  @Prop({ type: [Object], default: [] })
+  documents!: DealDocument[]
 
   @ApiProperty({ description: "Deal slug for SEO-friendly URLs" })
   @Prop({ required: false })
