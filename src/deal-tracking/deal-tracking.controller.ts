@@ -4,7 +4,8 @@ import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
 import { DealTrackingService } from "./deal-tracking.service"
 import { CreateDealTrackingDto } from "./dto/create-deal-tracking.dto"
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery } from "@nestjs/swagger"
+import { RejectDealDto } from "./dto/reject-deal.dto"
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery, ApiBody } from "@nestjs/swagger"
 import { Request as ExpressRequest } from "express"
 
 interface RequestWithUser extends ExpressRequest {
@@ -131,16 +132,23 @@ export class DealTrackingController {
   @ApiBearerAuth()
   @ApiOperation({ summary: "Log a rejection interaction for a deal" })
   @ApiParam({ name: "dealId", description: "Deal ID" })
+  @ApiBody({
+    type: RejectDealDto,
+    required: false,
+    description: "Optional rejection notes"
+  })
   @ApiResponse({ status: 201, description: "Rejection logged successfully" })
   @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
   async logRejection(
     @Request() req: RequestWithUser,
     @Param("dealId") dealId: string,
-    @Body() body: { notes?: string },
+    @Body() body: RejectDealDto = {}, 
   ) {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealTrackingService.logRejection(dealId, req.user.userId, body.notes)
+    // Safely access notes with optional chaining and default value
+    const notes = body?.notes || undefined;
+    return this.dealTrackingService.logRejection(dealId, req.user.userId, notes)
   }
 }

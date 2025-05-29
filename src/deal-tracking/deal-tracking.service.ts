@@ -4,11 +4,21 @@ import { DealTracking, DealTrackingDocument, InteractionType } from "./schemas/d
 import { CreateDealTrackingDto } from "./dto/create-deal-tracking.dto"
 import { InjectModel } from "@nestjs/mongoose"
 
+// Add this interface for the Deal document
+interface DealDocument {
+  _id: string;
+  interestedBuyers: string[];
+  save(): Promise<DealDocument>;
+}
+
 @Injectable()
 export class DealTrackingService {
   constructor(
     @InjectModel(DealTracking.name)
-    private dealTrackingModel: Model<DealTrackingDocument>
+    private dealTrackingModel: Model<DealTrackingDocument>,
+    // Inject the Deal model properly
+    @InjectModel('Deal') // Make sure 'Deal' matches your schema name
+    private dealModel: Model<DealDocument>
   ) { }
 
   async create(buyerId: string, createDealTrackingDto: CreateDealTrackingDto): Promise<DealTracking> {
@@ -84,9 +94,8 @@ export class DealTrackingService {
   }
 
   async getRecentActivityForSeller(sellerId: string, limit = 10): Promise<any[]> {
-    // First get all deals by this seller
-    const dealModel = this.dealTrackingModel.db.model("Deal")
-    const sellerDeals = await dealModel.find({ seller: sellerId }, { _id: 1 }).exec()
+    // Use the properly injected deal model
+    const sellerDeals = await this.dealModel.find({ seller: sellerId }, { _id: 1 }).exec()
     const dealIds = sellerDeals.map((deal) => deal._id)
 
     // Then get recent activity for these deals
@@ -139,9 +148,8 @@ export class DealTrackingService {
   }
 
   async logInterest(dealId: string, buyerId: string): Promise<DealTracking> {
-    // Update the deal to add buyer to interested list
-    const dealModel = this.dealTrackingModel.db.model("Deal")
-    const deal = await dealModel.findById(dealId).exec()
+    // Use the properly injected deal model
+    const deal = await this.dealModel.findById(dealId).exec()
 
     if (!deal) {
       throw new NotFoundException(`Deal with ID ${dealId} not found`)
@@ -162,26 +170,30 @@ export class DealTrackingService {
   }
 
   async logRejection(dealId: string, buyerId: string, notes?: string): Promise<DealTracking> {
-    // Update the deal to remove buyer from interested list if present
-    const dealModel = this.dealTrackingModel.db.model("Deal")
-    const deal = await dealModel.findById(dealId).exec()
+    try {
+      // Use the properly injected deal model
+      const deal = await this.dealModel.findById(dealId).exec()
 
-    if (!deal) {
-      throw new NotFoundException(`Deal with ID ${dealId} not found`)
+      if (!deal) {
+        throw new NotFoundException(`Deal with ID ${dealId} not found`)
+      }
+
+      // Remove from interested buyers if present
+      if (deal.interestedBuyers.includes(buyerId)) {
+        deal.interestedBuyers = deal.interestedBuyers.filter((id) => id.toString() !== buyerId)
+        await deal.save()
+      }
+
+      // Create tracking record
+      return this.create(buyerId, {
+        dealId,
+        interactionType: InteractionType.REJECTED,
+        notes: notes || "Deal rejected",
+      })
+    } catch (error) {
+      console.error('Error in logRejection:', error)
+      throw error
     }
-
-    // Remove from interested buyers if present
-    if (deal.interestedBuyers.includes(buyerId)) {
-      deal.interestedBuyers = deal.interestedBuyers.filter((id) => id.toString() !== buyerId)
-      await deal.save()
-    }
-
-    // Create tracking record
-    return this.create(buyerId, {
-      dealId,
-      interactionType: InteractionType.REJECTED,
-      notes: notes || "Deal rejected",
-    })
   }
 
   async getDetailedDealActivity(dealId: string): Promise<any[]> {
