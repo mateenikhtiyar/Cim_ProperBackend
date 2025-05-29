@@ -20,6 +20,7 @@ import { SellersService } from "./sellers.service"
 import { RegisterSellerDto } from "./dto/create-seller.dto"
 import { SellerGoogleAuthGuard } from "../auth/guards/seller-google-auth.guard"
 import { AuthService } from "../auth/auth.service"
+import { DealsService } from "../deals/deals.service" // Add this import
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam } from "@nestjs/swagger"
 import { GoogleSellerLoginResult } from "../auth/interfaces/google-seller-login-result.interface"
 import { Response } from "express"
@@ -34,6 +35,7 @@ export class SellersController {
     private readonly sellersService: SellersService,
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
+    private readonly dealsService: DealsService, // Add DealsService injection
   ) { }
 
   @Post('register')
@@ -208,13 +210,15 @@ export class SellersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getDealHistory(@Request() req: any) {
     try {
-      if (!req.user?.userId) {
+      if (!req.user?.userId && !req.user?.sub) {
         throw new UnauthorizedException("User not authenticated");
       }
 
-      // Import the DealsService
-      const dealsService = req.app.get('DealsService');
-      return dealsService.getDealHistory(req.user.userId);
+      // Get the seller ID from the JWT token
+      const sellerId = req.user?.userId || req.user?.sub;
+
+      // Use the injected DealsService directly
+      return await this.dealsService.getDealHistory(sellerId);
     } catch (error) {
       this.logger.error(`Error getting deal history: ${error.message}`, error.stack);
       throw error;
