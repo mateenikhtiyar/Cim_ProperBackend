@@ -15,7 +15,7 @@ export class CreateBuyerDto {
   @MinLength(6)
   password: string
 
-  @ApiProperty({ example: "Acme Inc", description: "Company name of the buyer" })
-  @IsNotEmpty()
-  companyName: string
+  // @ApiProperty({ example: "Acme Inc", description: "Company name of the buyer" })
+  // @IsNotEmpty()
+  // companyName: string
 }

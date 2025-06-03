@@ -1,15 +1,17 @@
 import { Injectable, ConflictException, NotFoundException } from "@nestjs/common"
-import { InjectModel } from "@nestjs/mongoose"
 import { Model } from "mongoose"
 import * as bcrypt from "bcrypt"
-import { Buyer, type BuyerDocument } from "./schemas/buyer.schema"
+import { Buyer, BuyerDocument } from "./schemas/buyer.schema"
 import { CreateBuyerDto } from "./dto/create-buyer.dto"
 import { UpdateBuyerDto } from "./dto/update-buyer.dto"
+import { InjectModel } from "@nestjs/mongoose"
 
 @Injectable()
 export class BuyersService {
+  // private buyerModel: Model<BuyerDocument>
+
   constructor(
-    @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
+    @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>
   ) {}
 
   async create(createBuyerDto: CreateBuyerDto): Promise<Buyer> {

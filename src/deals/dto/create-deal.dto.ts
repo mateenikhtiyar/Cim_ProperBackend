@@ -101,6 +101,20 @@ export class BuyerFitDto {
   minTransactionSize?: number
 }
 
+export class CreateDealWithFilesDto {
+  @ApiProperty({ description: "Deal data as JSON string" })
+  @IsString()
+  dealData: string
+
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'string', format: 'binary' },
+    description: 'Optional files to upload',
+    required: false
+  })
+  files?: any[]
+}
+
 export class CreateDealDto {
   @ApiProperty({ description: "Title of the deal", example: "SaaS Company Acquisition Opportunity" })
   @IsString()
@@ -210,4 +224,10 @@ export class CreateDealDto {
   @IsString({ each: true })
   @IsOptional()
   documents?: string[]
+
+  // Add seller field - this will be populated by the controller
+  @ApiProperty({ description: "Seller ID", required: false })
+  @IsString()
+  @IsOptional()
+  seller?: string
 }

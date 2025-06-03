@@ -21,9 +21,9 @@ export class Buyer {
   @Prop({ required: true })
   password: string
 
-  @ApiProperty({ description: "Company name of the buyer" })
-  @Prop({ required: true })
-  companyName: string
+  // @ApiProperty({ description: "Company name of the buyer" })
+  // @Prop({ required: true })
+  // companyName: string
 
   @ApiProperty({ description: "Role of the user", default: "buyer" })
   @Prop({ default: "buyer" })

@@ -12,6 +12,9 @@ import {
   Logger,
   HttpStatus,
   UnauthorizedException,
+  ForbiddenException,
+  Query,
+  BadRequestException,
 } from "@nestjs/common"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
@@ -20,11 +23,18 @@ import { SellersService } from "./sellers.service"
 import { RegisterSellerDto } from "./dto/create-seller.dto"
 import { SellerGoogleAuthGuard } from "../auth/guards/seller-google-auth.guard"
 import { AuthService } from "../auth/auth.service"
-import { DealsService } from "../deals/deals.service" // Add this import
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam } from "@nestjs/swagger"
+import { DealsService } from "../deals/deals.service"
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery } from "@nestjs/swagger"
 import { GoogleSellerLoginResult } from "../auth/interfaces/google-seller-login-result.interface"
 import { Response } from "express"
 import { ConfigService } from "@nestjs/config"
+
+interface UpdateSellerDto {
+  fullName?: string
+  email?: string
+  companyName?: string
+  password?: string
+}
 
 @ApiTags("sellers")
 @Controller("sellers")
@@ -35,7 +45,7 @@ export class SellersController {
     private readonly sellersService: SellersService,
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
-    private readonly dealsService: DealsService, // Add DealsService injection
+    private readonly dealsService: DealsService, // Make sure this is properly injected
   ) { }
 
   @Post('register')
@@ -169,7 +179,7 @@ export class SellersController {
   @ApiResponse({ status: 200, description: "Seller updated successfully" })
   @ApiResponse({ status: 403, description: "Forbidden - requires admin or seller role" })
   @ApiResponse({ status: 404, description: "Seller not found" })
-  async update(@Param('id') id: string, @Body() updateSellerDto: any, @Request() req: any) {
+  async update(@Param('id') id: string, @Body() updateSellerDto: UpdateSellerDto, @Request() req: any) {
     try {
       // If seller, can only update own profile
       if (req.user?.role === "seller" && req.user?.userId !== id && req.user?.sub !== id) {
@@ -222,6 +232,230 @@ export class SellersController {
     } catch (error) {
       this.logger.error(`Error getting deal history: ${error.message}`, error.stack);
       throw error;
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("deals/:dealId/buyer-interactions")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get buyer interactions for a specific deal" })
+  @ApiParam({ name: "dealId", type: String, description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return buyer interactions for the deal" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
+  async getDealBuyerInteractions(@Param('dealId') dealId: string, @Request() req: any) {
+    try {
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub
+
+      // First verify the seller owns this deal
+      const deal = await this.dealsService.findOne(dealId)
+      if (deal.seller.toString() !== sellerId) {
+        throw new ForbiddenException("You don't have permission to view interactions for this deal")
+      }
+
+      return await this.dealsService.getBuyerInteractions(dealId)
+    } catch (error) {
+      this.logger.error(`Error getting deal buyer interactions: ${error.message}`, error.stack)
+      throw error
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("deals/:dealId/status-summary")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get deal status summary with buyer breakdown" })
+  @ApiParam({ name: "dealId", type: String, description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return deal status summary" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
+  async getDealStatusSummary(@Param('dealId') dealId: string, @Request() req: any) {
+    try {
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub
+
+      // First verify the seller owns this deal
+      const deal = await this.dealsService.findOne(dealId)
+      if (deal.seller.toString() !== sellerId) {
+        throw new ForbiddenException("You don't have permission to view this deal's status")
+      }
+
+      return await this.dealsService.getDealWithBuyerStatus(dealId)
+    } catch (error) {
+      this.logger.error(`Error getting deal status summary: ${error.message}`, error.stack)
+      throw error
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("deals/:dealId/buyer-activity")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get detailed buyer activity for a specific deal" })
+  @ApiParam({ name: "dealId", type: String, description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return detailed buyer activity" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
+  async getDealBuyerActivity(@Param('dealId') dealId: string, @Request() req: any) {
+    try {
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub
+
+      // First verify the seller owns this deal
+      const deal = await this.dealsService.findOne(dealId)
+      if (deal.seller.toString() !== sellerId) {
+        throw new ForbiddenException("You don't have permission to view this deal's activity")
+      }
+
+      return await this.dealsService.getDetailedBuyerActivity(dealId)
+    } catch (error) {
+      this.logger.error(`Error getting deal buyer activity: ${error.message}`, error.stack)
+      throw error
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("deals/recent-buyer-actions")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get recent buyer actions across all seller's deals" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: Number,
+    description: "Number of recent actions to return (default: 20)",
+  })
+  @ApiResponse({ status: 200, description: "Return recent buyer actions" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async getRecentBuyerActions(@Request() req: any, @Query('limit') limit: number = 20) {
+    try {
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub
+      return await this.dealsService.getRecentBuyerActionsForSeller(sellerId, limit)
+    } catch (error) {
+      this.logger.error(`Error getting recent buyer actions: ${error.message}`, error.stack)
+      throw error
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("deals/:dealId/interested-buyers")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get list of buyers who showed interest in a deal" })
+  @ApiParam({ name: "dealId", type: String, description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return interested buyers" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
+  async getInterestedBuyers(@Param('dealId') dealId: string, @Request() req: any) {
+    try {
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub
+
+      // First verify the seller owns this deal
+      const deal = await this.dealsService.findOne(dealId)
+      if (deal.seller.toString() !== sellerId) {
+        throw new ForbiddenException("You don't have permission to view this deal's interested buyers")
+      }
+
+      return await this.dealsService.getInterestedBuyersDetails(dealId)
+    } catch (error) {
+      this.logger.error(`Error getting interested buyers: ${error.message}`, error.stack)
+      throw error
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("dashboard/buyer-engagement")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get buyer engagement dashboard for seller" })
+  @ApiResponse({ status: 200, description: "Return buyer engagement metrics" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async getBuyerEngagementDashboard(@Request() req: any) {
+    try {
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub
+      return await this.dealsService.getBuyerEngagementDashboard(sellerId)
+    } catch (error) {
+      this.logger.error(`Error getting buyer engagement dashboard: ${error.message}`, error.stack)
+      throw error
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Post("deals/:dealId/close")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Close a deal" })
+  @ApiParam({ name: "dealId", type: String, description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Deal closed successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
+  @ApiResponse({ status: 404, description: "Deal not found" })
+  async closeDeal(
+    @Param('dealId') dealId: string,
+    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string } = {},
+    @Request() req: any,
+  ) {
+    try {
+      this.logger.debug(`Attempting to close deal ${dealId}`)
+
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub
+      this.logger.debug(`Seller ID: ${sellerId}`)
+
+      // Validate dealId format
+      if (!dealId.match(/^[0-9a-fA-F]{24}$/)) {
+        throw new BadRequestException("Invalid deal ID format")
+      }
+
+      this.logger.debug(`Calling dealsService.closeDealseller with params:`, {
+        dealId,
+        sellerId,
+        finalSalePrice: body.finalSalePrice,
+        notes: body.notes,
+        winningBuyerId: body.winningBuyerId,
+      })
+
+      const closedDeal = await this.dealsService.closeDealseller(
+        dealId,
+        sellerId,
+        body.finalSalePrice,
+        body.notes,
+        body.winningBuyerId,
+      )
+
+      return {
+        message: "Deal closed successfully",
+        deal: closedDeal,
+      }
+    } catch (error) {
+      this.logger.error(`Error closing deal: ${error.message}`, error.stack)
+      throw error
     }
   }
 }

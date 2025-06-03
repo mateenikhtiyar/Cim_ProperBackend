@@ -43,16 +43,79 @@ export class DealsController {
   @Roles("seller")
   @Post()
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Create a new deal" })
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "Create a new deal with optional document uploads" })
   @ApiResponse({ status: 201, description: "Deal created successfully", type: DealResponseDto })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
-  async create(@Body() createDealDto: CreateDealDto, @Request() req: RequestWithUser) {
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", example: "SaaS Company Acquisition Opportunity" },
+        companyDescription: { type: "string", example: "Established SaaS company..." },
+        dealType: { type: "string", enum: ["acquisition", "merger", "investment", "partnership", "other"] },
+        industrySector: { type: "string", example: "Technology" },
+        geographySelection: { type: "string", example: "United States" },
+        yearsInBusiness: { type: "number", example: 5 },
+        files: {
+          type: "array",
+          items: {
+            type: "string",
+            format: "binary",
+          },
+          description: "Optional documents to upload with the deal",
+        },
+        // Add other fields as needed
+      },
+    },
+  })
+  @UseInterceptors(
+    FilesInterceptor("files", 10, {
+      storage: diskStorage({
+        destination: "./uploads/deal-documents",
+        filename: (req: any, file, cb) => {
+          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
+          const ext = extname(file.originalname)
+          const userId = req.user?.userId || "unknown"
+          const sanitizedOriginalName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")
+          cb(null, `${userId}_${uniqueSuffix}_${sanitizedOriginalName}`)
+        },
+      }),
+      fileFilter: (req, file, cb) => {
+        const allowedTypes = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|jpg|jpeg|png|gif)$/i
+        if (!file.originalname.match(allowedTypes)) {
+          return cb(new Error("Only document and image files are allowed!"), false)
+        }
+        cb(null, true)
+      },
+      limits: {
+        fileSize: 1024 * 1024 * 10, // 10MB limit per file
+      },
+    }),
+  )
+  async create(
+    @Body() createDealDto: CreateDealDto,
+    @Request() req: RequestWithUser,
+    @UploadedFiles() files?: Express.Multer.File[]
+  ) {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealsService.create(req.user.userId, createDealDto)
-  }
 
+    // Create the deal first
+    const dealWithSeller = { ...createDealDto, seller: req.user.userId }
+    const deal = await this.dealsService.create(dealWithSeller)
+
+    // If files were uploaded, add them to the deal
+    if (files && files.length > 0) {
+      // TODO: Implement document handling in your existing deals service
+    }
+
+    return deal
+  }
+  
+
+  
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
   @Post(":id/upload-documents")
@@ -216,6 +279,20 @@ export class DealsController {
     return this.dealsService.getCompletedDeals(req.user.userId);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("statistics")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get deal statistics for the seller" })
+  @ApiResponse({ status: 200, description: "Return deal statistics" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
+  async getDealStatistics(@Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+    return this.dealsService.getDealStatistics(req.user.userId);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get(":id")
   @ApiBearerAuth()
@@ -245,53 +322,6 @@ export class DealsController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
-  @Patch(":id")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Update a deal" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Deal updated successfully", type: DealResponseDto })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async update(@Param("id") id: string, @Request() req: RequestWithUser, @Body() updateDealDto: UpdateDealDto) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-    return this.dealsService.update(id, req.user.userId, updateDealDto)
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
-  @Delete(":id")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Delete a deal" })
-  @ApiParam({ name: "id", description: "Deal ID" })
-  @ApiResponse({ status: 200, description: "Deal deleted successfully" })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
-  @ApiResponse({ status: 404, description: "Deal not found" })
-  async remove(@Param("id") id: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
-    }
-    await this.dealsService.remove(id, req.user.userId)
-    return { message: "Deal deleted successfully" }
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
-  @Get("statistics")
-  @ApiBearerAuth()
-  @ApiOperation({ summary: "Get deal statistics for the seller" })
-  @ApiResponse({ status: 200, description: "Return deal statistics" })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
-  async getDealStatistics(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated");
-    }
-    return this.dealsService.getDealStatistics(req.user.userId);
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
   @Get(":id/matching-buyers")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get matching buyers for a deal" })
@@ -311,6 +341,66 @@ export class DealsController {
     }
 
     return this.dealsService.findMatchingBuyers(id)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get(":id/buyer-interactions")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get buyer interactions for a deal (seller only)" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return buyer interactions for the deal" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  async getDealBuyerInteractions(@Param("id") dealId: string, @Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    // Verify the seller owns this deal
+    const deal = await this.dealsService.findOne(dealId)
+    if (deal.seller.toString() !== req.user.userId) {
+      throw new ForbiddenException("You don't have permission to view interactions for this deal")
+    }
+
+    return this.dealsService.getBuyerInteractionsForDeal(dealId)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get(":id/status-summary")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get deal status summary with buyer breakdown (seller only)" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return deal status summary" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  async getDealStatusSummary(@Param("id") dealId: string, @Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    // Verify the seller owns this deal
+    const deal = await this.dealsService.findOne(dealId)
+    if (deal.seller.toString() !== req.user.userId) {
+      throw new ForbiddenException("You don't have permission to view this deal's status")
+    }
+
+    return this.dealsService.getDealWithBuyerStatusSummary(dealId)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Patch(":id")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update a deal" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Deal updated successfully", type: DealResponseDto })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  @ApiResponse({ status: 404, description: "Deal not found" })
+  async update(@Param("id") id: string, @Request() req: RequestWithUser, @Body() updateDealDto: UpdateDealDto) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    return this.dealsService.update(id, req.user.userId, updateDealDto)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -350,5 +440,162 @@ export class DealsController {
     }
 
     return this.dealsService.targetDealToBuyers(id, body.buyerIds)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Post(":id/close-deal")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Close a deal (seller only)" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        finalSalePrice: {
+          type: "number",
+          description: "Final sale price of the deal",
+        },
+        notes: {
+          type: "string",
+          description: "Notes about the deal closure",
+        },
+        winningBuyerId: {
+          type: "string",
+          description: "ID of the buyer who won the deal",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal closed successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  async closeDealBySeller(
+    @Param("id") dealId: string,
+    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string },
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    const closedDeal = await this.dealsService.closeDealseller(
+      dealId,
+      req.user.userId,
+      body.finalSalePrice,
+      body.notes,
+      body.winningBuyerId,
+    )
+
+    return {
+      message: "Deal closed successfully",
+      deal: closedDeal,
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Post(":id/update-status")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update deal status by buyer (active/pending/rejected)" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending", "active", "rejected"],
+          description: "New status for the deal",
+        },
+        notes: {
+          type: "string",
+          description: "Optional notes for the status change",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal status updated successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires buyer role" })
+  async updateDealStatusByBuyer(
+    @Param("id") dealId: string,
+    @Request() req: RequestWithUser,
+    @Body() body: { status: "pending" | "active" | "rejected"; notes?: string },
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    return this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, body.status, body.notes)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Delete(":id")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Delete a deal" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Deal deleted successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  @ApiResponse({ status: 404, description: "Deal not found" })
+  async remove(@Param("id") id: string, @Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    await this.dealsService.remove(id, req.user.userId)
+    return { message: "Deal deleted successfully" }
+  }
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Post(":id/close")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Close a deal (seller only)" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        finalSalePrice: {
+          type: "number",
+          description: "Final sale price of the deal",
+        },
+        notes: {
+          type: "string",
+          description: "Notes about the deal closure",
+        },
+        winningBuyerId: {
+          type: "string",
+          description: "ID of the buyer who won the deal",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal closed successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  async closeDeal(
+    @Param("id") dealId: string,
+    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string },
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    try {
+      const closedDeal = await this.dealsService.closeDealseller(
+        dealId,
+        req.user.userId,
+        body.finalSalePrice,
+        body.notes,
+        body.winningBuyerId,
+      )
+
+      return {
+        message: "Deal closed successfully",
+        deal: closedDeal,
+      }
+    } catch (error) {
+      console.error("Error closing deal:", error)
+      throw error
+    }
   }
 }

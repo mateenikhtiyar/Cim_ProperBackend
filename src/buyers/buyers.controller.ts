@@ -12,7 +12,7 @@ import {
   Patch,
   Param,
   Delete,
-  Body, // Add this import
+  Body,
 } from "@nestjs/common"
 import { FileInterceptor } from "@nestjs/platform-express"
 import { diskStorage } from "multer"
@@ -26,7 +26,7 @@ import { AuthService } from "../auth/auth.service"
 import { LoginBuyerDto } from "./dto/login-buyer.dto"
 import { GoogleLoginResult } from "../auth/interfaces/google-login-result.interface"
 import { DealsService } from "../deals/deals.service"
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiConsumes, ApiBody, ApiQuery } from "@nestjs/swagger"
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiConsumes, ApiBody, ApiQuery, ApiParam } from "@nestjs/swagger"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
 import { UpdateBuyerDto } from "./dto/update-buyer.dto"
@@ -52,8 +52,8 @@ export class BuyersController {
   @ApiOperation({ summary: "Register a new buyer" })
   @ApiResponse({ status: 201, description: "Buyer successfully registered" })
   @ApiResponse({ status: 409, description: "Email already exists" })
-  @ApiBody({ type: CreateBuyerDto }) // Add this for better Swagger documentation
-  async register(@Body() createBuyerDto: CreateBuyerDto) { // Add @Body() decorator
+  @ApiBody({ type: CreateBuyerDto })
+  async register(@Body() createBuyerDto: CreateBuyerDto) {
     try {
       const buyer = await this.buyersService.create(createBuyerDto)
       const result = buyer?.toObject ? buyer.toObject() : { ...buyer }
@@ -101,7 +101,7 @@ export class BuyersController {
       console.log("User ID value:", loginResult.user._id)
 
       const frontendUrl = process.env.FRONTEND_URL
-      const redirectPath = loginResult.isNewUser ? "/acquireprofile" : "/deals"
+      const redirectPath = loginResult.isNewUser ? "/buyer/acquireprofile" : "/deals"
 
       const userId = loginResult.user._id || (loginResult.user as any).id || "missing-id"
 
@@ -175,7 +175,7 @@ export class BuyersController {
   // IMPORTANT: Put specific routes BEFORE parameterized routes
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("admin")
-  @Get("all") // Changed from empty string to "all" to avoid conflicts
+  @Get("all")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get all buyers (Admin only)" })
   @ApiResponse({ status: 200, description: "Return all buyers." })
@@ -200,7 +200,7 @@ export class BuyersController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("buyer")
-  @Get("deals") // This specific route must come BEFORE the parameterized route
+  @Get("deals")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get all deals for the buyer" })
   @ApiQuery({
@@ -229,10 +229,91 @@ export class BuyersController {
     }
 
     try {
-      return await this.dealsService.getBuyerDeals(req.user.userId, status)
+      return await this.dealsService.getBuyerDeals(req.user.userId)
     } catch (error) {
       console.error("Error getting buyer deals:", error)
       throw new Error(`Failed to get buyer deals: ${error.message}`)
+    }
+  }
+
+  // NEW: Deal status update endpoints
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Post("deals/:dealId/status")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update deal status (active/pending/rejected)" })
+  @ApiParam({ name: "dealId", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending", "active", "rejected"],
+          description: "New status for the deal",
+        },
+        notes: {
+          type: "string",
+          description: "Optional notes for the status change",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal status updated successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async updateDealStatus(
+    @Request() req: RequestWithUser,
+    @Param("dealId") dealId: string,
+    @Body() body: { status: "pending" | "active" | "rejected"; notes?: string },
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    try {
+      return await this.dealsService.updateDealStatus(dealId, req.user.userId, body.status)
+    } catch (error) {
+      console.error("Error updating deal status:", error)
+      throw new Error(`Failed to update deal status: ${error.message}`)
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Post("deals/:dealId/update-status")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update deal status (active/pending/rejected) - Alternative endpoint" })
+  @ApiParam({ name: "dealId", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending", "active", "rejected"],
+          description: "New status for the deal",
+        },
+        notes: {
+          type: "string",
+          description: "Optional notes for the status change",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal status updated successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async updateDealStatusFromBuyer(
+    @Request() req: RequestWithUser,
+    @Param("dealId") dealId: string,
+    @Body() body: { status: "pending" | "active" | "rejected"; notes?: string },
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    try {
+      return await this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, body.status, body.notes)
+    } catch (error) {
+      console.error("Error updating deal status:", error)
+      throw new Error(`Failed to update deal status: ${error.message}`)
     }
   }
 
@@ -243,7 +324,7 @@ export class BuyersController {
   @ApiOperation({ summary: "Update buyer profile" })
   @ApiResponse({ status: 200, description: "The buyer has been successfully updated." })
   @ApiResponse({ status: 401, description: "Unauthorized." })
-  update(@Request() req: RequestWithUser, @Body() updateBuyerDto: UpdateBuyerDto) { // Add @Body() decorator here too
+  update(@Request() req: RequestWithUser, @Body() updateBuyerDto: UpdateBuyerDto) {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
@@ -263,5 +344,170 @@ export class BuyersController {
   @ApiResponse({ status: 200, description: "The buyer has been successfully deleted." })
   remove(@Param("id") id: string) {
     return this.buyersService.remove(id);
+  }
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Get("deals/active")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get active deals for the buyer" })
+  @ApiResponse({ status: 200, description: "Return active deals for the buyer" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async getActiveBuyerDeals(@Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    try {
+      return await this.dealsService.getBuyerDeals(req.user.userId, "active");
+    } catch (error) {
+      console.error("Error getting active buyer deals:", error);
+      throw new Error(`Failed to get active buyer deals: ${error.message}`);
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Get("deals/pending")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get pending deals for the buyer" })
+  @ApiResponse({ status: 200, description: "Return pending deals for the buyer" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async getPendingBuyerDeals(@Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    try {
+      return await this.dealsService.getBuyerDeals(req.user.userId, "pending");
+    } catch (error) {
+      console.error("Error getting pending buyer deals:", error);
+      throw new Error(`Failed to get pending buyer deals: ${error.message}`);
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Get("deals/rejected")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get rejected deals for the buyer" })
+  @ApiResponse({ status: 200, description: "Return rejected deals for the buyer" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async getRejectedBuyerDeals(@Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    try {
+      return await this.dealsService.getBuyerDeals(req.user.userId, "rejected");
+    } catch (error) {
+      console.error("Error getting rejected buyer deals:", error);
+      throw new Error(`Failed to get rejected buyer deals: ${error.message}`);
+    }
+  }
+
+  // 2. Quick action endpoints for deal status changes
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Post("deals/:dealId/activate")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Activate a deal (show interest)" })
+  @ApiParam({ name: "dealId", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        notes: {
+          type: "string",
+          description: "Optional notes for activation",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal activated successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async activateDeal(
+    @Request() req: RequestWithUser,
+    @Param("dealId") dealId: string,
+    @Body() body: { notes?: string } = {},
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    try {
+      return await this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, "active", body.notes)
+    } catch (error) {
+      console.error("Error activating deal:", error)
+      throw new Error(`Failed to activate deal: ${error.message}`)
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Post("deals/:dealId/reject")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Reject a deal" })
+  @ApiParam({ name: "dealId", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        notes: {
+          type: "string",
+          description: "Optional notes for rejection",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal rejected successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async rejectDeal(
+    @Request() req: RequestWithUser,
+    @Param("dealId") dealId: string,
+    @Body() body: { notes?: string } = {},
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    try {
+      return await this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, "rejected", body.notes)
+    } catch (error) {
+      console.error("Error rejecting deal:", error)
+      throw new Error(`Failed to reject deal: ${error.message}`)
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Post("deals/:dealId/set-pending")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Set deal as pending (under review)" })
+  @ApiParam({ name: "dealId", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        notes: {
+          type: "string",
+          description: "Optional notes for pending status",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Deal set as pending successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async setPendingDeal(
+    @Request() req: RequestWithUser,
+    @Param("dealId") dealId: string,
+    @Body() body: { notes?: string } = {},
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    try {
+      return await this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, "pending", body.notes)
+    } catch (error) {
+      console.error("Error setting deal as pending:", error)
+      throw new Error(`Failed to set deal as pending: ${error.message}`)
+    }
   }
 }
