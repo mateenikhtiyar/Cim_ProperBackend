@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from "@nestjs/common"
+import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common"
 import { Deal, DealDocumentType as DealDocument, DealStatus } from "./schemas/deal.schema"
 import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
@@ -21,18 +21,30 @@ export class DealsService {
     @InjectModel(Deal.name) private dealModel: Model<DealDocument>
   ) { }
 
-  async create(sellerId: string, createDealDto: CreateDealDto): Promise<Deal> {
-    const newDeal = new this.dealModel({
-      ...createDealDto,
-      seller: sellerId,
-      status: createDealDto.status || DealStatus.DRAFT,
-      timeline: {
+  async create(createDealDto: CreateDealDto): Promise<Deal> {
+    try {
+      // Log the incoming data for debugging
+      console.log("Creating deal with data:", JSON.stringify(createDealDto, null, 2))
+
+      // Ensure documents field is properly set
+      const dealData = {
+        ...createDealDto,
+        documents: createDealDto.documents || [], // Ensure it's an array
         createdAt: new Date(),
         updatedAt: new Date(),
-      },
-    })
+      }
 
-    return newDeal.save()
+      console.log("Final deal data:", JSON.stringify(dealData, null, 2))
+
+      const createdDeal = new this.dealModel(dealData)
+      const savedDeal = await createdDeal.save()
+
+      console.log("Saved deal:", JSON.stringify(savedDeal, null, 2))
+      return savedDeal
+    } catch (error) {
+      console.error("Error creating deal:", error)
+      throw error
+    }
   }
 
   async findAll(query: any = {}): Promise<Deal[]> {
@@ -142,7 +154,7 @@ export class DealsService {
     const deal = await this.dealModel.findById(id).exec()
 
     if (!deal) {
-      throw new NotFoundException(`Deal with ID ${id} not found`)
+      throw new NotFoundException(`Deal with ID "${id}" not found`)
     }
 
     if (deal.seller.toString() !== sellerId) {
@@ -541,25 +553,178 @@ export class DealsService {
     }
   }
 
+  async closeDealseller(
+    dealId: string,
+    sellerId: string,
+    finalSalePrice?: number,
+    notes?: string,
+    winningBuyerId?: string,
+  ): Promise<Deal> {
+    console.log(`closeDealseller called with:`, { dealId, sellerId, finalSalePrice, notes, winningBuyerId })
+
+    // Get the document, not the plain object
+    const dealDoc = await this.dealModel.findById(dealId).exec()
+    if (!dealDoc) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`)
+    }
+
+    console.log(`Found deal:`, { dealId: dealDoc._id, dealSeller: dealDoc.seller })
+
+    // Verify seller owns this deal
+    if (dealDoc.seller.toString() !== sellerId) {
+      throw new ForbiddenException("You don't have permission to close this deal")
+    }
+
+    // Update deal status to completed
+    dealDoc.status = DealStatus.COMPLETED
+    dealDoc.timeline.completedAt = new Date()
+    dealDoc.timeline.updatedAt = new Date()
+
+    // Update financial details if final sale price is provided
+    if (finalSalePrice) {
+      if (!dealDoc.financialDetails) {
+        dealDoc.financialDetails = {}
+      }
+      dealDoc.financialDetails.finalSalePrice = finalSalePrice
+    }
+
+    // Create tracking record for deal closure
+    const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+    // Create tracking data with or without buyer field based on winningBuyerId
+    const trackingData: any = {
+      deal: dealId,
+      interactionType: "completed",
+      timestamp: new Date(),
+      notes: notes || "Deal closed by seller",
+      metadata: { finalSalePrice, winningBuyerId },
+    }
+
+    // Only add buyer field if winningBuyerId is provided
+    if (winningBuyerId) {
+      trackingData.buyer = winningBuyerId
+    }
+
+    const tracking = new dealTrackingModel(trackingData)
+
+    await tracking.save()
+    const savedDeal = await dealDoc.save() // Now calling save() on the document
+
+    console.log(`Deal closed successfully:`, { dealId, status: savedDeal.status })
+    return savedDeal
+  }
+
+  async updateDealStatusByBuyer(
+    dealId: string,
+    buyerId: string,
+    status: "pending" | "active" | "rejected",
+    notes?: string,
+  ): Promise<any> {
+    try {
+      // Get the document, not the plain object
+      const dealDoc = await this.dealModel.findById(dealId).exec()
+      if (!dealDoc) {
+        throw new NotFoundException(`Deal with ID "${dealId}" not found`)
+      }
+
+      // Check if buyer is targeted for this deal
+      if (!dealDoc.targetedBuyers.includes(buyerId)) {
+        throw new ForbiddenException("You are not targeted for this deal")
+      }
+
+      // Update invitation status
+      const currentInvitation = dealDoc.invitationStatus.get(buyerId)
+      dealDoc.invitationStatus.set(buyerId, {
+        invitedAt: currentInvitation?.invitedAt || new Date(),
+        respondedAt: new Date(),
+        response: status === "active" ? "accepted" : status,
+        notes: notes || "",
+      })
+
+      // Update interested buyers list
+      if (status === "active") {
+        if (!dealDoc.interestedBuyers.includes(buyerId)) {
+          dealDoc.interestedBuyers.push(buyerId)
+        }
+      } else if (status === "rejected") {
+        dealDoc.interestedBuyers = dealDoc.interestedBuyers.filter((id) => id.toString() !== buyerId)
+      }
+
+      // Create tracking record
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+      let interactionType
+      switch (status) {
+        case "active":
+          interactionType = "interest"
+          break
+        case "rejected":
+          interactionType = "rejected"
+          break
+        case "pending":
+          interactionType = "view"
+          break
+      }
+
+      const tracking = new dealTrackingModel({
+        deal: dealId,
+        buyer: buyerId,
+        interactionType,
+        timestamp: new Date(),
+        notes: notes || `Deal status changed to ${status}`,
+        metadata: { status, previousStatus: currentInvitation?.response },
+      })
+
+      await tracking.save()
+      dealDoc.timeline.updatedAt = new Date()
+      await dealDoc.save() // Now calling save() on the document
+
+      return { deal: dealDoc, tracking, message: `Deal status updated to ${status}` }
+    } catch (error) {
+      throw new Error(`Failed to update deal status: ${error.message}`)
+    }
+  }
+
+  // Replace the existing getBuyerDeals method with this improved version
   async getBuyerDeals(buyerId: string, status?: "pending" | "active" | "rejected" | "completed"): Promise<Deal[]> {
-    const query: any = {
-      targetedBuyers: buyerId,
+    const baseQuery: any = {
+      $or: [{ targetedBuyers: buyerId }, { isPublic: true, status: { $in: [DealStatus.ACTIVE, DealStatus.DRAFT] } }],
     }
 
     if (status === "active") {
-      query.interestedBuyers = buyerId
-      query.status = DealStatus.ACTIVE
+      // Deals where buyer has shown interest (regardless of deal status)
+      baseQuery.interestedBuyers = buyerId
+      // Remove the deal status restriction for active buyer deals
+      delete baseQuery.$or
+      baseQuery.targetedBuyers = buyerId
     } else if (status === "rejected") {
-      query.interestedBuyers = { $ne: buyerId }
+      // Deals that were targeted to buyer but they rejected
+      baseQuery.targetedBuyers = buyerId
+      baseQuery.interestedBuyers = { $ne: buyerId }
+
+      // Check invitation status for explicit rejections
+      baseQuery.$or = [{ [`invitationStatus.${buyerId}.response`]: "rejected" }]
     } else if (status === "completed") {
-      query.status = DealStatus.COMPLETED
-      query.interestedBuyers = buyerId // Only show completed deals the buyer was interested in
+      baseQuery.status = DealStatus.COMPLETED
+      baseQuery.interestedBuyers = buyerId
     } else if (status === "pending") {
-      query.status = DealStatus.ACTIVE
-      query.interestedBuyers = { $ne: buyerId }
+      // Deals targeted to buyer but no response yet, or explicitly set as pending
+      baseQuery.targetedBuyers = buyerId
+      baseQuery.$and = [
+        {
+          $or: [{ interestedBuyers: { $ne: buyerId } }, { [`invitationStatus.${buyerId}.response`]: "pending" }],
+        },
+        {
+          [`invitationStatus.${buyerId}.response`]: { $ne: "rejected" },
+        },
+      ]
     }
 
-    return this.dealModel.find(query).sort({ "timeline.updatedAt": -1 }).exec()
+    console.log(`Query for ${status} deals:`, JSON.stringify(baseQuery, null, 2))
+
+    const deals = await this.dealModel.find(baseQuery).sort({ "timeline.updatedAt": -1 }).exec()
+    console.log(`Found ${deals.length} ${status} deals for buyer ${buyerId}`)
+
+    return deals
   }
 
   async getBuyerDealsWithPagination(
@@ -636,5 +801,622 @@ export class DealsService {
       .exec()
 
     return trackingData
+  }
+
+  async getBuyerInteractionsForDeal(dealId: string): Promise<any[]> {
+    try {
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+      const pipeline: any[] = [
+        { $match: { deal: dealId } },
+        {
+          $lookup: {
+            from: "buyers",
+            localField: "buyer",
+            foreignField: "_id",
+            as: "buyerInfo",
+          },
+        },
+        { $unwind: "$buyerInfo" },
+        {
+          $lookup: {
+            from: "companyprofiles",
+            localField: "buyer",
+            foreignField: "buyer",
+            as: "companyInfo",
+          },
+        },
+        {
+          $unwind: {
+            path: "$companyInfo",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $group: {
+            _id: "$buyer",
+            buyerName: { $first: "$buyerInfo.fullName" },
+            buyerEmail: { $first: "$buyerInfo.email" },
+            buyerCompany: { $first: "$buyerInfo.companyName" },
+            companyType: { $first: "$companyInfo.companyType" },
+            interactions: {
+              $push: {
+                type: "$interactionType",
+                timestamp: "$timestamp",
+                notes: "$notes",
+                metadata: "$metadata",
+              },
+            },
+            lastInteraction: { $max: "$timestamp" },
+            totalInteractions: { $sum: 1 },
+          },
+        },
+        {
+          $addFields: {
+            currentStatus: {
+              $let: {
+                vars: {
+                  lastInteraction: {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$interactions",
+                          cond: { $eq: ["$$this.timestamp", "$lastInteraction"] },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                },
+                in: "$$lastInteraction.type",
+              },
+            },
+          },
+        },
+        { $sort: { lastInteraction: -1 } },
+        {
+          $project: {
+            buyerId: "$_id",
+            buyerName: 1,
+            buyerEmail: 1,
+            buyerCompany: 1,
+            companyType: 1,
+            currentStatus: 1,
+            lastInteraction: 1,
+            totalInteractions: 1,
+            interactions: {
+              $slice: ["$interactions", -5], // Last 5 interactions
+            },
+          },
+        },
+      ]
+
+      return dealTrackingModel.aggregate(pipeline).exec()
+    } catch (error) {
+      throw new Error(`Failed to get buyer interactions: ${error.message}`)
+    }
+  }
+
+  async getDealWithBuyerStatusSummary(dealId: string): Promise<any> {
+    try {
+      const deal = await this.findOne(dealId)
+      const buyerInteractions = await this.getBuyerInteractionsForDeal(dealId)
+
+      // Group buyers by status
+      const buyersByStatus = {
+        active: buyerInteractions.filter((b) => b.currentStatus === "interest"),
+        pending: buyerInteractions.filter((b) => b.currentStatus === "view"),
+        rejected: buyerInteractions.filter((b) => b.currentStatus === "rejected"),
+      }
+
+      return {
+        deal,
+        buyersByStatus,
+        summary: {
+          totalTargeted: deal.targetedBuyers.length,
+          totalActive: buyersByStatus.active.length,
+          totalPending: buyersByStatus.pending.length,
+          totalRejected: buyersByStatus.rejected.length,
+        },
+      }
+    } catch (error) {
+      throw new Error(`Failed to get deal with buyer status: ${error.message}`)
+    }
+  }
+
+  async getBuyerInteractions(dealId: string): Promise<any[]> {
+    try {
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+      const pipeline: any[] = [
+        { $match: { deal: dealId } },
+        {
+          $lookup: {
+            from: "buyers",
+            localField: "buyer",
+            foreignField: "_id",
+            as: "buyerInfo",
+          },
+        },
+        { $unwind: "$buyerInfo" },
+        {
+          $lookup: {
+            from: "companyprofiles",
+            localField: "buyer",
+            foreignField: "buyer",
+            as: "companyInfo",
+          },
+        },
+        {
+          $unwind: {
+            path: "$companyInfo",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $group: {
+            _id: "$buyer",
+            buyerName: { $first: "$buyerInfo.fullName" },
+            buyerEmail: { $first: "$buyerInfo.email" },
+            buyerCompany: { $first: "$buyerInfo.companyName" },
+            companyType: { $first: "$companyInfo.companyType" },
+            interactions: {
+              $push: {
+                type: "$interactionType",
+                timestamp: "$timestamp",
+                notes: "$notes",
+                metadata: "$metadata",
+              },
+            },
+            lastInteraction: { $max: "$timestamp" },
+            totalInteractions: { $sum: 1 },
+          },
+        },
+        {
+          $addFields: {
+            currentStatus: {
+              $let: {
+                vars: {
+                  lastInteraction: {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$interactions",
+                          cond: { $eq: ["$$this.timestamp", "$lastInteraction"] },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                },
+                in: "$$lastInteraction.type",
+              },
+            },
+          },
+        },
+        { $sort: { lastInteraction: -1 } },
+        {
+          $project: {
+            buyerId: "$_id",
+            buyerName: 1,
+            buyerEmail: 1,
+            buyerCompany: 1,
+            companyType: 1,
+            currentStatus: 1,
+            lastInteraction: 1,
+            totalInteractions: 1,
+            interactions: {
+              $slice: ["$interactions", -5], // Last 5 interactions
+            },
+          },
+        },
+      ]
+
+      return dealTrackingModel.aggregate(pipeline).exec()
+    } catch (error) {
+      throw new Error(`Failed to get buyer interactions: ${error.message}`)
+    }
+  }
+
+  async closeDeal(dealId: string, finalSalePrice?: number, notes?: string, winningBuyerId?: string): Promise<Deal> {
+    // Get the document, not the plain object
+    const dealDoc = await this.dealModel.findById(dealId).exec()
+    if (!dealDoc) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`)
+    }
+
+    // Update deal status to completed
+    dealDoc.status = DealStatus.COMPLETED
+    dealDoc.timeline.completedAt = new Date()
+    dealDoc.timeline.updatedAt = new Date()
+
+    // Update financial details if final sale price is provided
+    if (finalSalePrice) {
+      if (!dealDoc.financialDetails) {
+        dealDoc.financialDetails = {}
+      }
+      dealDoc.financialDetails.finalSalePrice = finalSalePrice
+    }
+
+    // Create tracking record for deal closure
+    const dealTrackingModel = this.dealModel.db.model("DealTracking")
+    const tracking = new dealTrackingModel({
+      deal: dealId,
+      buyer: winningBuyerId || null,
+      interactionType: "completed",
+      timestamp: new Date(),
+      notes: notes || "Deal closed",
+      metadata: { finalSalePrice, winningBuyerId },
+    })
+
+    await tracking.save()
+    return dealDoc.save() // Now calling save() on the document
+  }
+
+  async getDealWithBuyerStatus(dealId: string): Promise<any> {
+    try {
+      const deal = await this.findOne(dealId)
+      const buyerInteractions = await this.getBuyerInteractions(dealId)
+
+      // Group buyers by status
+      const buyersByStatus = {
+        active: buyerInteractions.filter((b) => b.currentStatus === "interest"),
+        pending: buyerInteractions.filter((b) => b.currentStatus === "view"),
+        rejected: buyerInteractions.filter((b) => b.currentStatus === "rejected"),
+      }
+
+      return {
+        deal,
+        buyersByStatus,
+        summary: {
+          totalTargeted: deal.targetedBuyers.length,
+          totalActive: buyersByStatus.active.length,
+          totalPending: buyersByStatus.pending.length,
+          totalRejected: buyersByStatus.rejected.length,
+        },
+      }
+    } catch (error) {
+      throw new Error(`Failed to get deal with buyer status: ${error.message}`)
+    }
+  }
+
+  async getDetailedBuyerActivity(dealId: string): Promise<any> {
+    try {
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+      const pipeline: any[] = [
+        { $match: { deal: dealId } },
+        {
+          $lookup: {
+            from: "buyers",
+            localField: "buyer",
+            foreignField: "_id",
+            as: "buyerInfo",
+          },
+        },
+        { $unwind: "$buyerInfo" },
+        {
+          $lookup: {
+            from: "companyprofiles",
+            localField: "buyer",
+            foreignField: "buyer",
+            as: "companyInfo",
+          },
+        },
+        {
+          $unwind: {
+            path: "$companyInfo",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            buyerId: "$buyer",
+            buyerName: "$buyerInfo.fullName",
+            buyerEmail: "$buyerInfo.email",
+            buyerCompany: "$buyerInfo.companyName",
+            companyType: "$companyInfo.companyType",
+            interactionType: 1,
+            timestamp: 1,
+            notes: 1,
+            metadata: 1,
+            actionDescription: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ["$interactionType", "interest"] }, then: "Showed Interest (Activated)" },
+                  { case: { $eq: ["$interactionType", "rejected"] }, then: "Rejected Deal" },
+                  { case: { $eq: ["$interactionType", "view"] }, then: "Set as Pending" },
+                  { case: { $eq: ["$interactionType", "completed"] }, then: "Deal Completed" },
+                ],
+                default: "Other Action",
+              },
+            },
+          },
+        },
+        { $sort: { timestamp: -1 } },
+      ]
+
+      const activities = await dealTrackingModel.aggregate(pipeline).exec()
+
+      // Group by action type for summary
+      const summary = {
+        totalActivated: activities.filter((a) => a.interactionType === "interest").length,
+        totalRejected: activities.filter((a) => a.interactionType === "rejected").length,
+        totalPending: activities.filter((a) => a.interactionType === "view").length,
+        uniqueBuyers: [...new Set(activities.map((a) => a.buyerId.toString()))].length,
+      }
+
+      return {
+        activities,
+        summary,
+        deal: await this.findOne(dealId),
+      }
+    } catch (error) {
+      throw new Error(`Failed to get detailed buyer activity: ${error.message}`)
+    }
+  }
+
+  async getRecentBuyerActionsForSeller(sellerId: string, limit = 20): Promise<any[]> {
+    try {
+      // Get all deals for this seller
+      const sellerDeals = await this.dealModel.find({ seller: sellerId }, { _id: 1, title: 1 }).exec()
+      const dealIds = sellerDeals.map((deal) => deal._id)
+
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+      const pipeline: any[] = [
+        {
+          $match: {
+            deal: { $in: dealIds },
+            interactionType: { $in: ["interest", "rejected", "view"] }, // Only buyer actions
+          },
+        },
+        {
+          $lookup: {
+            from: "buyers",
+            localField: "buyer",
+            foreignField: "_id",
+            as: "buyerInfo",
+          },
+        },
+        { $unwind: "$buyerInfo" },
+        {
+          $lookup: {
+            from: "deals",
+            localField: "deal",
+            foreignField: "_id",
+            as: "dealInfo",
+          },
+        },
+        { $unwind: "$dealInfo" },
+        {
+          $project: {
+            _id: 1,
+            dealId: "$deal",
+            dealTitle: "$dealInfo.title",
+            buyerId: "$buyer",
+            buyerName: "$buyerInfo.fullName",
+            buyerCompany: "$buyerInfo.companyName",
+            interactionType: 1,
+            timestamp: 1,
+            notes: 1,
+            actionDescription: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ["$interactionType", "interest"] }, then: "Activated Deal" },
+                  { case: { $eq: ["$interactionType", "rejected"] }, then: "Rejected Deal" },
+                  { case: { $eq: ["$interactionType", "view"] }, then: "Set as Pending" },
+                ],
+                default: "Other Action",
+              },
+            },
+            actionColor: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ["$interactionType", "interest"] }, then: "green" },
+                  { case: { $eq: ["$interactionType", "rejected"] }, then: "red" },
+                  { case: { $eq: ["$interactionType", "view"] }, then: "yellow" },
+                ],
+                default: "gray",
+              },
+            },
+          },
+        },
+        { $sort: { timestamp: -1 } },
+        { $limit: limit },
+      ]
+
+      return dealTrackingModel.aggregate(pipeline).exec()
+    } catch (error) {
+      throw new Error(`Failed to get recent buyer actions: ${error.message}`)
+    }
+  }
+
+  async getInterestedBuyersDetails(dealId: string): Promise<any[]> {
+    try {
+      const deal = await this.findOne(dealId)
+
+      if (!deal.interestedBuyers || deal.interestedBuyers.length === 0) {
+        return []
+      }
+
+      const buyerModel = this.dealModel.db.model("Buyer")
+      const companyProfileModel = this.dealModel.db.model("CompanyProfile")
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+      const pipeline: any[] = [
+        { $match: { _id: { $in: deal.interestedBuyers } } },
+        {
+          $lookup: {
+            from: "companyprofiles",
+            localField: "_id",
+            foreignField: "buyer",
+            as: "companyInfo",
+          },
+        },
+        {
+          $unwind: {
+            path: "$companyInfo",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            fullName: 1,
+            email: 1,
+            companyName: "$companyInfo.companyName",
+            companyType: "$companyInfo.companyType",
+            website: "$companyInfo.website",
+          },
+        },
+      ]
+
+      const interestedBuyers = await buyerModel.aggregate(pipeline).exec()
+
+      // Get interaction history for each buyer
+      for (const buyer of interestedBuyers) {
+        const interactions = await dealTrackingModel
+          .find({
+            deal: dealId,
+            buyer: buyer._id,
+          })
+          .sort({ timestamp: -1 })
+          .limit(5)
+          .exec()
+
+        buyer.recentInteractions = interactions
+        buyer.lastInteraction = interactions[0]?.timestamp
+        buyer.totalInteractions = interactions.length
+      }
+
+      return interestedBuyers.sort(
+        (a, b) => new Date(b.lastInteraction).getTime() - new Date(a.lastInteraction).getTime(),
+      )
+    } catch (error) {
+      throw new Error(`Failed to get interested buyers details: ${error.message}`)
+    }
+  }
+
+  async getBuyerEngagementDashboard(sellerId: string): Promise<any> {
+    try {
+      const deals = await this.dealModel.find({ seller: sellerId }).exec()
+      const dealIds = deals.map((deal) => deal._id)
+
+      const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+      // Get engagement metrics
+      const engagementStats = await dealTrackingModel
+        .aggregate([
+          { $match: { deal: { $in: dealIds } } },
+          {
+            $group: {
+              _id: "$interactionType",
+              count: { $sum: 1 },
+              uniqueBuyers: { $addToSet: "$buyer" },
+            },
+          },
+          {
+            $project: {
+              interactionType: "$_id",
+              count: 1,
+              uniqueBuyersCount: { $size: "$uniqueBuyers" },
+            },
+          },
+        ])
+        .exec()
+
+      // Get recent activity (last 30 days)
+      const thirtyDaysAgo = new Date()
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+      const recentActivity = await dealTrackingModel
+        .aggregate([
+          {
+            $match: {
+              deal: { $in: dealIds },
+              timestamp: { $gte: thirtyDaysAgo },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: "%Y-%m-%d", date: "$timestamp" },
+              },
+              activations: {
+                $sum: { $cond: [{ $eq: ["$interactionType", "interest"] }, 1, 0] },
+              },
+              rejections: {
+                $sum: { $cond: [{ $eq: ["$interactionType", "rejected"] }, 1, 0] },
+              },
+              views: {
+                $sum: { $cond: [{ $eq: ["$interactionType", "view"] }, 1, 0] },
+              },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ])
+        .exec()
+
+      // Get top performing deals
+      const topDeals = await dealTrackingModel
+        .aggregate([
+          { $match: { deal: { $in: dealIds } } },
+          {
+            $group: {
+              _id: "$deal",
+              totalInteractions: { $sum: 1 },
+              activations: {
+                $sum: { $cond: [{ $eq: ["$interactionType", "interest"] }, 1, 0] },
+              },
+              uniqueBuyers: { $addToSet: "$buyer" },
+            },
+          },
+          {
+            $lookup: {
+              from: "deals",
+              localField: "_id",
+              foreignField: "_id",
+              as: "dealInfo",
+            },
+          },
+          { $unwind: "$dealInfo" },
+          {
+            $project: {
+              dealId: "$_id",
+              dealTitle: "$dealInfo.title",
+              totalInteractions: 1,
+              activations: 1,
+              uniqueBuyersCount: { $size: "$uniqueBuyers" },
+              engagementRate: {
+                $multiply: [{ $divide: ["$activations", "$totalInteractions"] }, 100],
+              },
+            },
+          },
+          { $sort: { engagementRate: -1 } },
+          { $limit: 5 },
+        ])
+        .exec()
+
+      return {
+        overview: {
+          totalDeals: deals.length,
+          activeDeals: deals.filter((d) => d.status === DealStatus.ACTIVE).length,
+          completedDeals: deals.filter((d) => d.status === DealStatus.COMPLETED).length,
+        },
+        engagementStats,
+        recentActivity,
+        topDeals,
+        summary: {
+          totalActivations: engagementStats.find((s) => s.interactionType === "interest")?.count || 0,
+          totalRejections: engagementStats.find((s) => s.interactionType === "rejected")?.count || 0,
+          totalViews: engagementStats.find((s) => s.interactionType === "view")?.count || 0,
+          uniqueEngagedBuyers: [...new Set(engagementStats.flatMap((s) => s.uniqueBuyers || []))].length,
+        },
+      }
+    } catch (error) {
+      throw new Error(`Failed to get buyer engagement dashboard: ${error.message}`)
+    }
   }
 }

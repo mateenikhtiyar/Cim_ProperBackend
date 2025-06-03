@@ -23,7 +23,14 @@ export class DealTracking {
   deal!: string
 
   @ApiProperty({ description: "Reference to the buyer" })
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: "Buyer", required: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: "Buyer",
+    required: function (this: any) {
+      // Make buyer field optional for 'completed' interaction type
+      return this.interactionType !== "completed"
+    },
+  })
   buyer!: string
 
   @ApiProperty({ description: "Type of interaction", enum: InteractionType })
