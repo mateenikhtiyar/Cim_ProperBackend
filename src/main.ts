@@ -8,11 +8,9 @@ import * as fs from "fs"
 async function bootstrap() {
   try {
     const app = await NestFactory.create(AppModule)
-    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000/"
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000/"
     // Remove trailing slash if present
-    if (frontendUrl.endsWith("/")) {
-      frontendUrl = frontendUrl.slice(0, -1)
-    }
+    const trimmedFrontendUrl = frontendUrl.endsWith("/") ? frontendUrl.slice(0, -1) : frontendUrl
 
     app.useGlobalPipes(
       new ValidationPipe({
@@ -35,7 +33,7 @@ async function bootstrap() {
 
     // Fix CORS configuration
     app.enableCors({
-      origin: frontendUrl,
+      origin: trimmedFrontendUrl,
       credentials: true,
     })
 
@@ -56,12 +54,17 @@ async function bootstrap() {
     const document = SwaggerModule.createDocument(app, config)
     SwaggerModule.setup("api", app, document)
 
-    console.log("MongoDB URI:", process.env.MONGODB_URI)
+    // Use the PORT environment variable provided by Render
+    const port = process.env.PORT || 3001
+
+    console.log("MongoDB URI:", process.env.MONGODB_URI ? "Configured" : "Not configured")
     console.log("Google Client ID configured:", !!process.env.GOOGLE_CLIENT_ID)
-    console.log("Frontend URL configured as:", frontendUrl)
-    await app.listen(3001)
-    console.log("Application running on port 3001")
-    console.log("Swagger documentation available at: http://localhost:3001/api")
+    console.log("Frontend URL configured as:", trimmedFrontendUrl)
+    console.log(`Starting server on port ${port}`)
+
+    await app.listen(port)
+    console.log(`Application running on port ${port}`)
+    console.log(`Swagger documentation available at: http://localhost:${port}/api`)
   } catch (error) {
     console.error("Failed to start application:", error)
   }
