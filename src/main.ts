@@ -35,11 +35,7 @@ async function bootstrap() {
 
     // Fix CORS configuration
     app.enableCors({
-      origin: [
-        frontendUrl, // Your production URL
-        'http://168.231.74.35:3000', // Your frontend development URL
-        'http://localhost:3000', // Local development
-      ],
+      origin: frontendUrl,
       credentials: true,
     })
 
