@@ -8,7 +8,7 @@ import * as fs from "fs"
 async function bootstrap() {
   try {
     const app = await NestFactory.create(AppModule)
-    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000/"
+    let frontendUrl = process.env.FRONTEND_URL || "https://buyer.cimamplify.com/"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
@@ -61,7 +61,7 @@ async function bootstrap() {
     console.log("Frontend URL configured as:", frontendUrl)
     await app.listen(3001)
     console.log("Application running on port 3001")
-    console.log("Swagger documentation available at: http://localhost:3001/api")
+    console.log("Swagger documentation available at: https://buyer.cimamplify.com/api")
   } catch (error) {
     console.error("Failed to start application:", error)
   }

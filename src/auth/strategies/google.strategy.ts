@@ -9,7 +9,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, "google") {
     super({
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:3001/buyers/google/callback",
+      callbackURL: "https://buyer.cimamplify.com/buyers/google/callback",
       scope: ["email", "profile"],
     } as StrategyOptions)
   }
