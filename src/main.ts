@@ -61,7 +61,7 @@ async function bootstrap() {
     console.log("Frontend URL configured as:", frontendUrl)
     await app.listen(3001)
     console.log("Application running on port 3001")
-    console.log("Swagger documentation available at: https://buyer.cimamplify.com/api")
+    console.log("Swagger documentation available at: http://localhost:3001/api")
   } catch (error) {
     console.error("Failed to start application:", error)
   }
