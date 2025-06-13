@@ -205,15 +205,24 @@ export class DealsService {
   async findMatchingBuyers(dealId: string): Promise<any[]> {
     const deal = await this.findOne(dealId)
 
-    // Basic filter to exclude buyers who have opted out
-    const baseQuery: any = {
+    // MANDATORY filters - must match both geography and industry
+    const mandatoryQuery: any = {
       "preferences.stopSendingDeals": { $ne: true },
+      // MANDATORY: Geography must match
+      "targetCriteria.countries": {
+        $in: [deal.geographySelection]
+      },
+      // MANDATORY: Industry sector must match
+      "targetCriteria.industrySectors": {
+        $in: [deal.industrySector]
+      },
     }
 
     const companyProfileModel = this.dealModel.db.model("CompanyProfile")
     const matchingProfiles = await companyProfileModel
       .aggregate([
-        { $match: baseQuery },
+        // First filter: Apply mandatory criteria
+        { $match: mandatoryQuery },
         {
           $lookup: {
             from: "buyers",
@@ -225,117 +234,149 @@ export class DealsService {
         { $unwind: "$buyerInfo" },
         {
           $addFields: {
-            // Calculate match scores for each criterion
-            industryMatch: {
-              $cond: [
-                { $in: [deal.industrySector, { $ifNull: ["$targetCriteria.industrySectors", []] }] },
-                10, // Points for industry match
-                0,
-              ],
-            },
-            geographyMatch: {
-              $cond: [
-                { $in: [deal.geographySelection, { $ifNull: ["$targetCriteria.countries", []] }] },
-                10, // Points for geography match
-                0,
-              ],
-            },
+            // Since geography and industry are mandatory, they always get full points
+            industryMatch: 10, // Always 10 points since it's mandatory
+            geographyMatch: 10, // Always 10 points since it's mandatory
+
+            // Revenue range matching (optional - contributes to score if criteria exists)
             revenueMatch: {
               $cond: [
                 {
-                  $and: [
+                  $or: [
+                    // No revenue criteria set - give partial points
                     {
-                      $or: [
+                      $and: [
                         { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
-                        {
-                          $lte: [
-                            { $ifNull: ["$targetCriteria.revenueMin", 0] },
-                            { $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] },
-                          ],
-                        },
-                      ],
+                        { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] }
+                      ]
                     },
+                    // Revenue criteria set and deal falls within range
                     {
-                      $or: [
-                        { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+                      $and: [
                         {
-                          $gte: [
-                            { $ifNull: ["$targetCriteria.revenueMax", 0] },
-                            { $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] },
+                          $or: [
+                            { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
+                            {
+                              $lte: [
+                                { $ifNull: ["$targetCriteria.revenueMin", 0] },
+                                { $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] },
+                              ],
+                            },
+                          ],
+                        },
+                        {
+                          $or: [
+                            { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+                            {
+                              $gte: [
+                                { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] },
+                                { $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] },
+                              ],
+                            },
                           ],
                         },
                       ],
                     },
-                  ],
+                  ]
                 },
-                8, // Points for revenue match
-                0,
+                8, // Points for revenue match or no criteria
+                0, // No points if deal is outside buyer's revenue range
               ],
             },
+
+            // EBITDA range matching (optional - contributes to score if criteria exists)
             ebitdaMatch: {
               $cond: [
                 {
-                  $and: [
+                  $or: [
+                    // No EBITDA criteria set - give partial points
                     {
-                      $or: [
+                      $and: [
                         { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
-                        {
-                          $lte: [
-                            { $ifNull: ["$targetCriteria.ebitdaMin", 0] },
-                            { $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] },
-                          ],
-                        },
-                      ],
+                        { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] }
+                      ]
                     },
+                    // EBITDA criteria set and deal falls within range
                     {
-                      $or: [
-                        { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+                      $and: [
                         {
-                          $gte: [
-                            { $ifNull: ["$targetCriteria.ebitdaMax", 0] },
-                            { $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] },
+                          $or: [
+                            { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
+                            {
+                              $lte: [
+                                { $ifNull: ["$targetCriteria.ebitdaMin", 0] },
+                                { $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] },
+                              ],
+                            },
+                          ],
+                        },
+                        {
+                          $or: [
+                            { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+                            {
+                              $gte: [
+                                { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] },
+                                { $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] },
+                              ],
+                            },
                           ],
                         },
                       ],
                     },
-                  ],
+                  ]
                 },
-                8, // Points for EBITDA match
-                0,
+                8, // Points for EBITDA match or no criteria
+                0, // No points if deal is outside buyer's EBITDA range
               ],
             },
+
+            // Transaction size range matching (optional - contributes to score if criteria exists)
             transactionSizeMatch: {
               $cond: [
                 {
-                  $and: [
+                  $or: [
+                    // No transaction size criteria set - give partial points
                     {
-                      $or: [
+                      $and: [
                         { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMin", null] }, null] },
-                        {
-                          $lte: [
-                            { $ifNull: ["$targetCriteria.transactionSizeMin", 0] },
-                            { $ifNull: [deal.financialDetails?.askingPrice, 0] },
-                          ],
-                        },
-                      ],
+                        { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMax", null] }, null] }
+                      ]
                     },
+                    // Transaction size criteria set and deal falls within range
                     {
-                      $or: [
-                        { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMax", null] }, null] },
+                      $and: [
                         {
-                          $gte: [
-                            { $ifNull: ["$targetCriteria.transactionSizeMax", 0] },
-                            { $ifNull: [deal.financialDetails?.askingPrice, 0] },
+                          $or: [
+                            { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMin", null] }, null] },
+                            {
+                              $lte: [
+                                { $ifNull: ["$targetCriteria.transactionSizeMin", 0] },
+                                { $ifNull: [deal.financialDetails?.askingPrice, 0] },
+                              ],
+                            },
+                          ],
+                        },
+                        {
+                          $or: [
+                            { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMax", null] }, null] },
+                            {
+                              $gte: [
+                                { $ifNull: ["$targetCriteria.transactionSizeMax", Number.MAX_SAFE_INTEGER] },
+                                { $ifNull: [deal.financialDetails?.askingPrice, 0] },
+                              ],
+                            },
                           ],
                         },
                       ],
                     },
-                  ],
+                  ]
                 },
-                8, // Points for transaction size match
-                0,
+                8, // Points for transaction size match or no criteria
+                0, // No points if deal is outside buyer's transaction size range
               ],
             },
+
+            // Business model matching (optional - bonus points for preferences)
             businessModelMatch: {
               $sum: [
                 {
@@ -346,7 +387,7 @@ export class DealsService {
                         { $in: ["Recurring Revenue", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
                       ],
                     },
-                    3, // Points for recurring revenue match
+                    3, // Bonus points for recurring revenue match
                     0,
                   ],
                 },
@@ -358,7 +399,7 @@ export class DealsService {
                         { $in: ["Project-Based", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
                       ],
                     },
-                    3, // Points for project-based match
+                    3, // Bonus points for project-based match
                     0,
                   ],
                 },
@@ -370,7 +411,7 @@ export class DealsService {
                         { $in: ["Asset Light", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
                       ],
                     },
-                    3, // Points for asset light match
+                    3, // Bonus points for asset light match
                     0,
                   ],
                 },
@@ -382,12 +423,14 @@ export class DealsService {
                         { $in: ["Asset Heavy", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
                       ],
                     },
-                    3, // Points for asset heavy match
+                    3, // Bonus points for asset heavy match
                     0,
                   ],
                 },
               ],
             },
+
+            // Management preference matching (optional - bonus points for preferences)
             managementMatch: {
               $cond: [
                 {
@@ -396,10 +439,12 @@ export class DealsService {
                     { $in: ["Owner(s) Departing", { $ifNull: ["$targetCriteria.managementTeamPreference", []] }] },
                   ],
                 },
-                6, // Points for management preference match
+                6, // Bonus points for management preference match
                 0,
               ],
             },
+
+            // Years in business matching (optional - contributes to score if criteria exists)
             yearsMatch: {
               $cond: [
                 {
@@ -408,7 +453,7 @@ export class DealsService {
                     { $gte: [deal.yearsInBusiness, { $ifNull: ["$targetCriteria.minYearsInBusiness", 0] }] },
                   ],
                 },
-                5, // Points for years in business match
+                5, // Points for years in business match or no criteria
                 0,
               ],
             },
@@ -466,8 +511,8 @@ export class DealsService {
             totalMatchScore: 1,
             matchPercentage: { $round: ["$matchPercentage", 0] },
             matchDetails: {
-              industryMatch: { $gt: ["$industryMatch", 0] },
-              geographyMatch: { $gt: ["$geographyMatch", 0] },
+              industryMatch: true, // Always true since it's mandatory
+              geographyMatch: true, // Always true since it's mandatory
               revenueMatch: { $gt: ["$revenueMatch", 0] },
               ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
               transactionSizeMatch: { $gt: ["$transactionSizeMatch", 0] },
@@ -475,18 +520,400 @@ export class DealsService {
               managementMatch: { $gt: ["$managementMatch", 0] },
               yearsMatch: { $gt: ["$yearsMatch", 0] },
             },
+            // Additional details for debugging/transparency
+            criteriaDetails: {
+              dealIndustry: deal.industrySector,
+              dealGeography: deal.geographySelection,
+              dealRevenue: deal.financialDetails?.trailingRevenueAmount,
+              dealEbitda: deal.financialDetails?.trailingEBITDAAmount,
+              dealTransactionSize: deal.financialDetails?.askingPrice,
+              dealYearsInBusiness: deal.yearsInBusiness,
+            },
           },
         },
         // Sort by match percentage in descending order
         { $sort: { matchPercentage: -1 } },
-        // Only include profiles with at least 20% match
-        { $match: { matchPercentage: { $gte: 20 } } },
+        // Since geography and industry are mandatory, minimum match should be higher
+        // Base match is now 20 points (geography + industry), so minimum threshold can be adjusted
+        { $match: { matchPercentage: { $gte: 40 } } }, // Minimum 40% match
       ])
       .exec()
 
     return matchingProfiles
   }
+  
+  // ---------------------------------------------------------------------------------------------------------------------
 
+
+
+
+  // async findMatchingBuyers(dealId: string): Promise<any[]> {
+  //   const deal = await this.findOne(dealId)
+
+  //   // Extract deal values for use in aggregation
+  //   const dealGeography = deal.geographySelection
+  //   const dealIndustry = deal.industrySector
+  //   const dealRevenue = deal.financialDetails?.trailingRevenueAmount || 0
+  //   const dealEBITDA = deal.financialDetails?.trailingEBITDAAmount || 0
+  //   const dealAskingPrice = deal.financialDetails?.askingPrice || 0
+  //   const dealRevenueGrowth = deal.financialDetails?.avgRevenueGrowth || 0
+  //   const dealYearsInBusiness = deal.yearsInBusiness || 0
+  //   const dealStakePercentage = deal.stakePercentage || 100
+  //   const dealRecurringRevenue = deal.businessModel?.recurringRevenue || false
+  //   const dealProjectBased = deal.businessModel?.projectBased || false
+  //   const dealAssetLight = deal.businessModel?.assetLight || false
+  //   const dealAssetHeavy = deal.businessModel?.assetHeavy || false
+  //   const dealOwnerDeparting = deal.managementPreferences?.retiringDivesting || false
+
+  //   // Basic filter to exclude buyers who have opted out
+  //   const baseQuery: any = {
+  //     "preferences.stopSendingDeals": { $ne: true },
+  //   }
+
+  //   const companyProfileModel = this.dealModel.db.model("CompanyProfile")
+  //   const matchingProfiles = await companyProfileModel
+  //     .aggregate([
+  //       { $match: baseQuery },
+  //       {
+  //         $lookup: {
+  //           from: "buyers",
+  //           localField: "buyer",
+  //           foreignField: "_id",
+  //           as: "buyerInfo",
+  //         },
+  //       },
+  //       { $unwind: "$buyerInfo" },
+  //       {
+  //         $addFields: {
+  //           // MANDATORY: Geography must match (no points if empty array)
+  //           geographyMatch: {
+  //             $cond: [
+  //               {
+  //                 $and: [
+  //                   // Must have countries specified (no empty array allowed)
+  //                   { $gt: [{ $size: { $ifNull: ["$targetCriteria.countries", []] } }, 0] },
+  //                   // Deal's geography must be in the target list
+  //                   { $in: [dealGeography, { $ifNull: ["$targetCriteria.countries", []] }] },
+  //                 ]
+  //               },
+  //               10, // Points for geography match
+  //               0,  // No match if criteria not met
+  //             ],
+  //           },
+
+  //           // MANDATORY: Industry must match (no points if empty array)
+  //           industryMatch: {
+  //             $cond: [
+  //               {
+  //                 $and: [
+  //                   // Must have industry sectors specified (no empty array allowed)
+  //                   { $gt: [{ $size: { $ifNull: ["$targetCriteria.industrySectors", []] } }, 0] },
+  //                   // Deal's industry must be in the target list
+  //                   { $in: [dealIndustry, { $ifNull: ["$targetCriteria.industrySectors", []] }] },
+  //                 ]
+  //               },
+  //               10, // Points for industry match
+  //               0,  // No match if criteria not met
+  //             ],
+  //           },
+
+  //           // MANDATORY: Revenue must be within specified range
+  //           revenueMatch: {
+  //             $cond: [
+  //               {
+  //                 $and: [
+  //                   // Must have both min and max specified (not null or 0)
+  //                   { $ne: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
+  //                   { $ne: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+  //                   { $gt: ["$targetCriteria.revenueMin", 0] },
+  //                   { $gt: ["$targetCriteria.revenueMax", 0] },
+  //                   // Deal revenue must be within the range
+  //                   { $gte: [dealRevenue, { $ifNull: ["$targetCriteria.revenueMin", 0] }] },
+  //                   { $lte: [dealRevenue, { $ifNull: ["$targetCriteria.revenueMax", 0] }] },
+  //                 ],
+  //               },
+  //               8, // Points for revenue match
+  //               0, // No match if criteria not met
+  //             ],
+  //           },
+
+  //           // MANDATORY: EBITDA must be within specified range (0 allows negative EBITDA)
+  //           ebitdaMatch: {
+  //             $cond: [
+  //               {
+  //                 $and: [
+  //                   // Must have both min and max specified (not null, but 0 is allowed for min)
+  //                   { $ne: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
+  //                   { $ne: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+  //                   { $gte: ["$targetCriteria.ebitdaMin", 0] }, // Min can be 0 (allows negative EBITDA)
+  //                   { $gt: ["$targetCriteria.ebitdaMax", 0] },  // Max must be greater than 0
+  //                   // Deal EBITDA must be within the range
+  //                   { $gte: [dealEBITDA, { $ifNull: ["$targetCriteria.ebitdaMin", 0] }] },
+  //                   { $lte: [dealEBITDA, { $ifNull: ["$targetCriteria.ebitdaMax", 0] }] },
+  //                 ],
+  //               },
+  //               8, // Points for EBITDA match
+  //               0, // No match if criteria not met
+  //             ],
+  //           },
+
+  //           // MANDATORY: Transaction size must be within specified range
+  //           transactionSizeMatch: {
+  //             $cond: [
+  //               {
+  //                 $and: [
+  //                   // Must have both min and max specified (not null or 0)
+  //                   { $ne: [{ $ifNull: ["$targetCriteria.transactionSizeMin", null] }, null] },
+  //                   { $ne: [{ $ifNull: ["$targetCriteria.transactionSizeMax", null] }, null] },
+  //                   { $gt: ["$targetCriteria.transactionSizeMin", 0] },
+  //                   { $gt: ["$targetCriteria.transactionSizeMax", 0] },
+  //                   // Deal asking price must be within the range
+  //                   { $gte: [dealAskingPrice, { $ifNull: ["$targetCriteria.transactionSizeMin", 0] }] },
+  //                   { $lte: [dealAskingPrice, { $ifNull: ["$targetCriteria.transactionSizeMax", 0] }] },
+  //                 ],
+  //               },
+  //               8, // Points for transaction size match
+  //               0, // No match if criteria not met
+  //             ],
+  //           },
+
+  //           // OPTIONAL: Business model matching
+  //           businessModelMatch: {
+  //             $sum: [
+  //               {
+  //                 $cond: [
+  //                   {
+  //                     $and: [
+  //                       { $eq: [dealRecurringRevenue, true] },
+  //                       { $in: ["Recurring Revenue", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+  //                     ],
+  //                   },
+  //                   3, // Points for recurring revenue match
+  //                   0,
+  //                 ],
+  //               },
+  //               {
+  //                 $cond: [
+  //                   {
+  //                     $and: [
+  //                       { $eq: [dealProjectBased, true] },
+  //                       { $in: ["Project-Based", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+  //                     ],
+  //                   },
+  //                   3, // Points for project-based match
+  //                   0,
+  //                 ],
+  //               },
+  //               {
+  //                 $cond: [
+  //                   {
+  //                     $and: [
+  //                       { $eq: [dealAssetLight, true] },
+  //                       { $in: ["Asset Light", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+  //                     ],
+  //                   },
+  //                   3, // Points for asset light match
+  //                   0,
+  //                 ],
+  //               },
+  //               {
+  //                 $cond: [
+  //                   {
+  //                     $and: [
+  //                       { $eq: [dealAssetHeavy, true] },
+  //                       { $in: ["Asset Heavy", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] },
+  //                     ],
+  //                   },
+  //                   3, // Points for asset heavy match
+  //                   0,
+  //                 ],
+  //               },
+  //             ],
+  //           },
+
+  //           // OPTIONAL: Management matching
+  //           managementMatch: {
+  //             $cond: [
+  //               {
+  //                 $or: [
+  //                   // If no management preferences specified, consider neutral (partial match)
+  //                   { $eq: [{ $size: { $ifNull: ["$targetCriteria.managementTeamPreference", []] } }, 0] },
+  //                   // If deal matches specific management preferences
+  //                   {
+  //                     $and: [
+  //                       { $eq: [dealOwnerDeparting, true] },
+  //                       { $in: ["Owner(s) Departing", { $ifNull: ["$targetCriteria.managementTeamPreference", []] }] },
+  //                     ],
+  //                   },
+  //                 ]
+  //               },
+  //               6, // Points for management preference match
+  //               2, // Partial points if no specific preference
+  //             ],
+  //           },
+
+  //           // OPTIONAL: Years in business matching
+  //           yearsMatch: {
+  //             $cond: [
+  //               {
+  //                 $or: [
+  //                   { $eq: [{ $ifNull: ["$targetCriteria.minYearsInBusiness", null] }, null] },
+  //                   { $eq: ["$targetCriteria.minYearsInBusiness", 0] },
+  //                   { $gte: [dealYearsInBusiness, { $ifNull: ["$targetCriteria.minYearsInBusiness", 0] }] },
+  //                 ],
+  //               },
+  //               5, // Points for years in business match
+  //               0,
+  //             ],
+  //           },
+
+  //           // OPTIONAL: Revenue growth match
+  //           revenueGrowthMatch: {
+  //             $cond: [
+  //               {
+  //                 $or: [
+  //                   { $eq: [{ $ifNull: ["$targetCriteria.revenueGrowth", null] }, null] },
+  //                   { $eq: ["$targetCriteria.revenueGrowth", 0] },
+  //                   { $gte: [dealRevenueGrowth, { $ifNull: ["$targetCriteria.revenueGrowth", 0] }] },
+  //                 ],
+  //               },
+  //               4, // Points for revenue growth match
+  //               0,
+  //             ],
+  //           },
+
+  //           // OPTIONAL: Stake percentage match
+  //           stakeMatch: {
+  //             $cond: [
+  //               {
+  //                 $or: [
+  //                   { $eq: [{ $ifNull: ["$targetCriteria.minStakePercent", null] }, null] },
+  //                   { $eq: ["$targetCriteria.minStakePercent", 0] },
+  //                   { $gte: [dealStakePercentage, { $ifNull: ["$targetCriteria.minStakePercent", 0] }] },
+  //                 ],
+  //               },
+  //               3, // Points for stake percentage match
+  //               0,
+  //             ],
+  //           },
+  //         },
+  //       },
+  //       {
+  //         $addFields: {
+  //           // Calculate total match score
+  //           totalMatchScore: {
+  //             $sum: [
+  //               "$industryMatch",
+  //               "$geographyMatch",
+  //               "$revenueMatch",
+  //               "$ebitdaMatch",
+  //               "$transactionSizeMatch",
+  //               "$businessModelMatch",
+  //               "$managementMatch",
+  //               "$yearsMatch",
+  //               "$revenueGrowthMatch",
+  //               "$stakeMatch",
+  //             ],
+  //           },
+  //           // Calculate match percentage (max possible score is still 57)
+  //           matchPercentage: {
+  //             $multiply: [
+  //               {
+  //                 $divide: [
+  //                   {
+  //                     $sum: [
+  //                       "$industryMatch",
+  //                       "$geographyMatch",
+  //                       "$revenueMatch",
+  //                       "$ebitdaMatch",
+  //                       "$transactionSizeMatch",
+  //                       "$businessModelMatch",
+  //                       "$managementMatch",
+  //                       "$yearsMatch",
+  //                       "$revenueGrowthMatch",
+  //                       "$stakeMatch",
+  //                     ],
+  //                   },
+  //                   57, // Maximum possible score
+  //                 ],
+  //               },
+  //               100,
+  //             ],
+  //           },
+  //         },
+  //       },
+  //       {
+  //         $project: {
+  //           _id: 1,
+  //           companyName: 1,
+  //           buyerId: "$buyer",
+  //           buyerName: "$buyerInfo.fullName",
+  //           buyerEmail: "$buyerInfo.email",
+  //           targetCriteria: 1,
+  //           preferences: 1,
+  //           totalMatchScore: 1,
+  //           matchPercentage: { $round: ["$matchPercentage", 0] },
+  //           matchDetails: {
+  //             industryMatch: { $gt: ["$industryMatch", 0] },
+  //             geographyMatch: { $gt: ["$geographyMatch", 0] },
+  //             revenueMatch: { $gt: ["$revenueMatch", 0] },
+  //             ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
+  //             transactionSizeMatch: { $gt: ["$transactionSizeMatch", 0] },
+  //             businessModelMatch: { $gt: ["$businessModelMatch", 0] },
+  //             managementMatch: { $gt: ["$managementMatch", 0] },
+  //             yearsMatch: { $gt: ["$yearsMatch", 0] },
+  //             revenueGrowthMatch: { $gt: ["$revenueGrowthMatch", 0] },
+  //             stakeMatch: { $gt: ["$stakeMatch", 0] },
+  //           },
+  //           matchScores: {
+  //             industryMatch: "$industryMatch",
+  //             geographyMatch: "$geographyMatch",
+  //             revenueMatch: "$revenueMatch",
+  //             ebitdaMatch: "$ebitdaMatch",
+  //             transactionSizeMatch: "$transactionSizeMatch",
+  //             businessModelMatch: "$businessModelMatch",
+  //             managementMatch: "$managementMatch",
+  //             yearsMatch: "$yearsMatch",
+  //             revenueGrowthMatch: "$revenueGrowthMatch",
+  //             stakeMatch: "$stakeMatch",
+  //           },
+  //         },
+  //       },
+  //       // Sort by match percentage in descending order
+  //       { $sort: { matchPercentage: -1 } },
+  //       // CRITICAL: Only include profiles where ALL mandatory criteria match
+  //       // This means all 5 mandatory criteria must have points > 0
+  //       {
+  //         $match: {
+  //           $and: [
+  //             { industryMatch: { $gt: 0 } },           // Must match industry
+  //             { geographyMatch: { $gt: 0 } },          // Must match geography  
+  //             { revenueMatch: { $gt: 0 } },            // Must match revenue range
+  //             { ebitdaMatch: { $gt: 0 } },             // Must match EBITDA range
+  //             { transactionSizeMatch: { $gt: 0 } },    // Must match transaction size range
+  //             { matchPercentage: { $gte: 20 } }        // Still maintain minimum 20% overall
+  //           ]
+  //         }
+  //       },
+  //     ])
+  //     .exec()
+
+  //   return matchingProfiles
+  // }
+
+
+
+
+
+
+
+
+
+
+
+
+
+  // -------------------------------------------------------------------------------------------------------------------------
   async targetDealToBuyers(dealId: string, buyerIds: string[]): Promise<Deal> {
     const deal = await this.findOne(dealId)
 
