@@ -24,6 +24,16 @@ export class FinancialDetailsDto {
   @IsOptional()
   trailingEBITDAAmount?: number
 
+  @ApiProperty({ description: "T12 Free Cash Flow", example: 180000, required: false })
+  @IsNumber()
+  @IsOptional()
+  t12FreeCashFlow?: number
+
+  @ApiProperty({ description: "T12 Net Income", example: 200000, required: false })
+  @IsNumber()
+  @IsOptional()
+  t12NetIncome?: number
+
   @ApiProperty({ description: "Average revenue growth in %", example: 42, required: false })
   @IsNumber()
   @IsOptional()
@@ -84,7 +94,7 @@ export class BuyerFitDto {
     description: "Capital Availability",
     enum: CapitalAvailability,
     example: "Ready to deploy immediately",
-    required: false
+    required: false,
   })
   @IsEnum(CapitalAvailability)
   @IsOptional()
@@ -107,10 +117,10 @@ export class CreateDealWithFilesDto {
   dealData: string
 
   @ApiProperty({
-    type: 'array',
-    items: { type: 'string', format: 'binary' },
-    description: 'Optional files to upload',
-    required: false
+    type: "array",
+    items: { type: "string", format: "binary" },
+    description: "Optional files to upload",
+    required: false,
   })
   files?: any[]
 }
@@ -122,10 +132,15 @@ export class CreateDealDto {
 
   @ApiProperty({
     description: "Description of the company",
-    example: "Established SaaS company with recurring revenue seeking acquisition."
+    example: "Established SaaS company with recurring revenue seeking acquisition.",
   })
   @IsString()
   companyDescription: string
+
+  @ApiProperty({ description: "Type of company", example: "SaaS Company", required: false })
+  @IsString()
+  @IsOptional()
+  companyType?: string
 
   @ApiProperty({ description: "Type of deal", enum: DealType, example: DealType.ACQUISITION })
   @IsEnum(DealType)
@@ -191,7 +206,7 @@ export class CreateDealDto {
   @ApiProperty({
     description: "Tags for categorizing the deal",
     example: ["growth opportunity", "recurring revenue"],
-    required: false
+    required: false,
   })
   @IsArray()
   @IsString({ each: true })
@@ -201,7 +216,7 @@ export class CreateDealDto {
   @ApiProperty({
     description: "Deal visibility (true = public, false = private/targeted)",
     default: false,
-    required: false
+    required: false,
   })
   @IsBoolean()
   @IsOptional()

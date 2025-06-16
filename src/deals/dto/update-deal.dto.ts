@@ -1,7 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger"
 import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max } from "class-validator"
 import { Type } from "class-transformer"
-import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
+import { DealStatus, DealType, DealVisibility } from "../schemas/deal.schema"
 import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto } from "./create-deal.dto"
 
 export class UpdateDealDto {
@@ -13,11 +13,16 @@ export class UpdateDealDto {
   @ApiProperty({
     description: "Description of the company",
     example: "Established SaaS company with recurring revenue seeking acquisition.",
-    required: false
+    required: false,
   })
   @IsString()
   @IsOptional()
   companyDescription?: string
+
+  @ApiProperty({ description: "Type of company", example: "SaaS Company", required: false })
+  @IsString()
+  @IsOptional()
+  companyType?: string
 
   @ApiProperty({ description: "Type of deal", enum: DealType, example: DealType.ACQUISITION, required: false })
   @IsEnum(DealType)
@@ -87,7 +92,7 @@ export class UpdateDealDto {
   @ApiProperty({
     description: "Tags for categorizing the deal",
     example: ["growth opportunity", "recurring revenue"],
-    required: false
+    required: false,
   })
   @IsArray()
   @IsString({ each: true })

@@ -11,6 +11,9 @@ export class DealResponseDto {
   @ApiProperty({ example: "Established SaaS company with recurring revenue seeking acquisition." })
   companyDescription: string
 
+  @ApiProperty({ example: "SaaS Company" })
+  companyType?: string
+
   @ApiProperty({ enum: DealType, example: DealType.ACQUISITION })
   dealType: DealType
 
@@ -41,17 +44,21 @@ export class DealResponseDto {
       trailingRevenueAmount: 1000000,
       trailingEBITDACurrency: "USD($)",
       trailingEBITDAAmount: 250000,
+      t12FreeCashFlow: 180000,
+      t12NetIncome: 200000,
       avgRevenueGrowth: 42,
       netIncome: 200000,
       askingPrice: 5000000,
-      finalSalePrice: null
-    }
+      finalSalePrice: null,
+    },
   })
   financialDetails?: {
     trailingRevenueCurrency?: string
     trailingRevenueAmount?: number
     trailingEBITDACurrency?: string
     trailingEBITDAAmount?: number
+    t12FreeCashFlow?: number
+    t12NetIncome?: number
     avgRevenueGrowth?: number
     netIncome?: number
     askingPrice?: number
@@ -63,8 +70,8 @@ export class DealResponseDto {
       recurringRevenue: true,
       projectBased: false,
       assetLight: true,
-      assetHeavy: false
-    }
+      assetHeavy: false,
+    },
   })
   businessModel?: {
     recurringRevenue?: boolean
@@ -76,8 +83,8 @@ export class DealResponseDto {
   @ApiProperty({
     example: {
       retiringDivesting: true,
-      staffStay: false
-    }
+      staffStay: false,
+    },
   })
   managementPreferences?: {
     retiringDivesting?: boolean
@@ -88,8 +95,8 @@ export class DealResponseDto {
     example: {
       capitalAvailability: CapitalAvailability.READY,
       minPriorAcquisitions: 2,
-      minTransactionSize: 1000000
-    }
+      minTransactionSize: 1000000,
+    },
   })
   buyerFit?: {
     capitalAvailability?: CapitalAvailability
@@ -102,8 +109,8 @@ export class DealResponseDto {
       createdAt: "2023-06-20T10:00:00.000Z",
       updatedAt: "2023-06-21T11:30:00.000Z",
       publishedAt: "2023-06-22T09:00:00.000Z",
-      completedAt: null
-    }
+      completedAt: null,
+    },
   })
   timeline: {
     createdAt: Date

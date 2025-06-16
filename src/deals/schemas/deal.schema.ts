@@ -49,6 +49,14 @@ class FinancialDetails {
   @Prop({ required: false })
   trailingEBITDAAmount?: number
 
+  @ApiProperty({ description: "T12 Free Cash Flow", example: 180000 })
+  @Prop({ required: false })
+  t12FreeCashFlow?: number
+
+  @ApiProperty({ description: "T12 Net Income", example: 200000 })
+  @Prop({ required: false })
+  t12NetIncome?: number
+
   @ApiProperty({ description: "Average revenue growth in %", example: 42 })
   @Prop({ required: false })
   avgRevenueGrowth?: number
@@ -166,6 +174,10 @@ export class Deal {
   @ApiProperty({ description: "Description of the company" })
   @Prop({ required: true })
   companyDescription!: string
+
+  @ApiProperty({ description: "Type of company", example: "SaaS Company" })
+  @Prop({ required: false })
+  companyType?: string
 
   @ApiProperty({ description: "Type of deal", enum: DealType })
   @Prop({ required: true, enum: DealType })
