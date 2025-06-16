@@ -28,13 +28,9 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery }
 import { GoogleSellerLoginResult } from "../auth/interfaces/google-seller-login-result.interface"
 import { Response } from "express"
 import { ConfigService } from "@nestjs/config"
+import { UpdateSellerDto } from "./dto/update-seller.dto";
 
-interface UpdateSellerDto {
-  fullName?: string
-  email?: string
-  companyName?: string
-  password?: string
-}
+
 
 @ApiTags("sellers")
 @Controller("sellers")
@@ -170,20 +166,65 @@ export class SellersController {
     }
   }
 
+  // @UseGuards(JwtAuthGuard, RolesGuard)
+  // @Roles("admin", "seller")
+  // @Patch(":id")
+  // @ApiBearerAuth()
+  // @ApiOperation({ summary: "Update a seller" })
+  // @ApiParam({ name: "id", type: String, description: "Seller ID" })
+  // @ApiResponse({ status: 200, description: "Seller updated successfully" })
+  // @ApiResponse({ status: 403, description: "Forbidden - requires admin or seller role" })
+  // @ApiResponse({ status: 404, description: "Seller not found" })
+  // async update(@Param('id') id: string, @Body() updateSellerDto: UpdateSellerDto, @Request() req: any) {
+  //   try {
+  //     // If seller, can only update own profile
+  //     if (req.user?.role === "seller" && req.user?.userId !== id && req.user?.sub !== id) {
+  //       return { message: "You can only update your own profile", statusCode: HttpStatus.FORBIDDEN }
+  //     }
+  //     return await this.sellersService.update(id, updateSellerDto)
+  //   } catch (error) {
+  //     this.logger.error(`Error updating seller: ${error.message}`, error.stack)
+  //     throw error
+  //   }
+  // }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Patch("me")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update seller's own profile" })
+  @ApiResponse({ status: 200, description: "Seller profile updated successfully" })
+  @ApiResponse({ status: 400, description: "Bad request - validation failed" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async updateMyProfile(@Body() updateSellerDto: UpdateSellerDto, @Request() req: any) {
+    try {
+      if (!req.user?.userId && !req.user?.sub) {
+        throw new UnauthorizedException("User not authenticated")
+      }
+      const sellerId = req.user?.userId || req.user?.sub
+      return await this.sellersService.update(sellerId, updateSellerDto)
+    } catch (error) {
+      this.logger.error(`Error updating seller profile: ${error.message}`, error.stack)
+      throw error
+    }
+  }
+
+  // Replace the existing update method
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("admin", "seller")
   @Patch(":id")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Update a seller" })
+  @ApiOperation({ summary: "Update a seller (admin can update any, seller can update own)" })
   @ApiParam({ name: "id", type: String, description: "Seller ID" })
   @ApiResponse({ status: 200, description: "Seller updated successfully" })
+  @ApiResponse({ status: 400, description: "Bad request - validation failed" })
   @ApiResponse({ status: 403, description: "Forbidden - requires admin or seller role" })
   @ApiResponse({ status: 404, description: "Seller not found" })
   async update(@Param('id') id: string, @Body() updateSellerDto: UpdateSellerDto, @Request() req: any) {
     try {
       // If seller, can only update own profile
       if (req.user?.role === "seller" && req.user?.userId !== id && req.user?.sub !== id) {
-        return { message: "You can only update your own profile", statusCode: HttpStatus.FORBIDDEN }
+        throw new ForbiddenException("You can only update your own profile")
       }
       return await this.sellersService.update(id, updateSellerDto)
     } catch (error) {

@@ -129,7 +129,6 @@ export class SellersService {
       throw new BadRequestException("Failed to create seller from Google account");
     }
   }
-
   async update(id: string, updateSellerDto: any): Promise<Seller> {
     try {
       const seller = await this.sellerModel.findById(id).exec();
@@ -137,13 +136,19 @@ export class SellersService {
         throw new NotFoundException("Seller not found");
       }
 
+      // Create a copy of the update data to avoid modifying the original
+      const updateData = { ...updateSellerDto };
+
       // If password is being updated, hash it
-      if (updateSellerDto.password) {
-        updateSellerDto.password = await bcrypt.hash(updateSellerDto.password, 10);
+      if (updateData.password && updateData.password.trim()) {
+        updateData.password = await bcrypt.hash(updateData.password, 10);
+      } else {
+        // Remove password field if it's empty, undefined, or null
+        delete updateData.password;
       }
 
       // Update the seller
-      Object.assign(seller, updateSellerDto);
+      Object.assign(seller, updateData);
       return seller.save();
     } catch (error) {
       this.logger.error(`Failed to update seller: ${error.message}`, error.stack);

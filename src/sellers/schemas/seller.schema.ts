@@ -49,6 +49,10 @@ export class Seller {
   @Prop({ default: null })
   profilePicture!: string;
 
+  @ApiProperty({ description: "Phone number of the seller" })
+  @Prop({ required: false })
+  phoneNumber?: string
+
   @ApiProperty({ description: "Whether the account was created using Google OAuth", default: false })
   @Prop({ default: false })
   isGoogleAccount!: boolean;
