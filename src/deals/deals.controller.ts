@@ -102,15 +102,29 @@ export class DealsController {
       throw new UnauthorizedException("User not authenticated")
     }
 
-    // Create the deal first
-    const dealWithSeller = { ...createDealDto, seller: req.user.userId }
-    const deal = await this.dealsService.create(dealWithSeller)
-
-    // If files were uploaded, add them to the deal
+    // Process uploaded files and get their paths
+    const documentPaths: string[] = []
     if (files && files.length > 0) {
-      // TODO: Implement document handling in your existing deals service
+      files.forEach(file => {
+        // Store the relative path from your uploads directory
+        const relativePath = `uploads/deal-documents/${file.filename}`
+        documentPaths.push(relativePath)
+
+        // Or if you want to store just the filename
+        // documentPaths.push(file.filename)
+
+        console.log(`File uploaded: ${file.originalname} -> ${file.filename}`)
+      })
     }
 
+    // Create the deal with uploaded document paths
+    const dealWithSellerAndDocuments = {
+      ...createDealDto,
+      seller: req.user.userId,
+      documents: documentPaths // Add the uploaded file paths to the documents array
+    }
+
+    const deal = await this.dealsService.create(dealWithSellerAndDocuments)
     return deal
   }
   
