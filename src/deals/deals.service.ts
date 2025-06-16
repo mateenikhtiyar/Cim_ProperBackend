@@ -21,6 +21,31 @@ export class DealsService {
     @InjectModel(Deal.name) private dealModel: Model<DealDocument>
   ) { }
 
+  // async create(createDealDto: CreateDealDto): Promise<Deal> {
+  //   try {
+  //     // Log the incoming data for debugging
+  //     console.log("Creating deal with data:", JSON.stringify(createDealDto, null, 2))
+
+  //     // Ensure documents field is properly set
+  //     const dealData = {
+  //       ...createDealDto,
+  //       documents: createDealDto.documents || [], // Ensure it's an array
+  //       createdAt: new Date(),
+  //       updatedAt: new Date(),
+  //     }
+
+  //     console.log("Final deal data:", JSON.stringify(dealData, null, 2))
+
+  //     const createdDeal = new this.dealModel(dealData)
+  //     const savedDeal = await createdDeal.save()
+
+  //     console.log("Saved deal:", JSON.stringify(savedDeal, null, 2))
+  //     return savedDeal
+  //   } catch (error) {
+  //     console.error("Error creating deal:", error)
+  //     throw error
+  //   }
+  // }
   async create(createDealDto: CreateDealDto): Promise<Deal> {
     try {
       // Log the incoming data for debugging
@@ -29,7 +54,7 @@ export class DealsService {
       // Ensure documents field is properly set
       const dealData = {
         ...createDealDto,
-        documents: createDealDto.documents || [], // Ensure it's an array
+        documents: createDealDto.documents || [], // This will now contain the file paths
         createdAt: new Date(),
         updatedAt: new Date(),
       }
@@ -47,12 +72,21 @@ export class DealsService {
     }
   }
 
+
+
+
+
   async findAll(query: any = {}): Promise<Deal[]> {
     return this.dealModel.find(query).exec()
   }
 
   async findBySeller(sellerId: string): Promise<Deal[]> {
-    return this.dealModel.find({ seller: sellerId }).exec()
+    return this.dealModel
+      .find({
+        seller: sellerId,
+        status: { $ne: DealStatus.COMPLETED },
+      })
+      .exec()
   }
 
   async findOne(id: string): Promise<DealDocument> {
@@ -541,7 +575,7 @@ export class DealsService {
 
     return matchingProfiles
   }
-  
+
   // ---------------------------------------------------------------------------------------------------------------------
 
 
@@ -980,6 +1014,66 @@ export class DealsService {
     }
   }
 
+  // async closeDealseller(
+  //   dealId: string,
+  //   sellerId: string,
+  //   finalSalePrice?: number,
+  //   notes?: string,
+  //   winningBuyerId?: string,
+  // ): Promise<Deal> {
+  //   console.log(`closeDealseller called with:`, { dealId, sellerId, finalSalePrice, notes, winningBuyerId })
+
+  //   // Get the document, not the plain object
+  //   const dealDoc = await this.dealModel.findById(dealId).exec()
+  //   if (!dealDoc) {
+  //     throw new NotFoundException(`Deal with ID "${dealId}" not found`)
+  //   }
+
+  //   console.log(`Found deal:`, { dealId: dealDoc._id, dealSeller: dealDoc.seller })
+
+  //   // Verify seller owns this deal
+  //   if (dealDoc.seller.toString() !== sellerId) {
+  //     throw new ForbiddenException("You don't have permission to close this deal")
+  //   }
+
+  //   // Update deal status to completed
+  //   dealDoc.status = DealStatus.COMPLETED
+  //   dealDoc.timeline.completedAt = new Date()
+  //   dealDoc.timeline.updatedAt = new Date()
+
+  //   // Update financial details if final sale price is provided
+  //   if (finalSalePrice) {
+  //     if (!dealDoc.financialDetails) {
+  //       dealDoc.financialDetails = {}
+  //     }
+  //     dealDoc.financialDetails.finalSalePrice = finalSalePrice
+  //   }
+
+  //   // Create tracking record for deal closure
+  //   const dealTrackingModel = this.dealModel.db.model("DealTracking")
+
+  //   // Create tracking data with or without buyer field based on winningBuyerId
+  //   const trackingData: any = {
+  //     deal: dealId,
+  //     interactionType: "completed",
+  //     timestamp: new Date(),
+  //     notes: notes || "Deal closed by seller",
+  //     metadata: { finalSalePrice, winningBuyerId },
+  //   }
+
+  //   // Only add buyer field if winningBuyerId is provided
+  //   if (winningBuyerId) {
+  //     trackingData.buyer = winningBuyerId
+  //   }
+
+  //   const tracking = new dealTrackingModel(trackingData)
+
+  //   await tracking.save()
+  //   const savedDeal = await dealDoc.save() // Now calling save() on the document
+
+  //   console.log(`Deal closed successfully:`, { dealId, status: savedDeal.status })
+  //   return savedDeal
+  // }
   async closeDealseller(
     dealId: string,
     sellerId: string,
@@ -1008,11 +1102,20 @@ export class DealsService {
     dealDoc.timeline.updatedAt = new Date()
 
     // Update financial details if final sale price is provided
-    if (finalSalePrice) {
-      if (!dealDoc.financialDetails) {
+    if (finalSalePrice !== undefined && finalSalePrice !== null) {
+      // Ensure financialDetails exists as a proper object
+      if (!dealDoc.financialDetails || typeof dealDoc.financialDetails !== "object") {
         dealDoc.financialDetails = {}
       }
+
+      // Set the final sale price
       dealDoc.financialDetails.finalSalePrice = finalSalePrice
+
+      // Mark the financialDetails field as modified to ensure Mongoose saves it
+      dealDoc.markModified("financialDetails")
+
+      console.log(`Setting finalSalePrice to: ${finalSalePrice}`)
+      console.log(`financialDetails after update:`, dealDoc.financialDetails)
     }
 
     // Create tracking record for deal closure
@@ -1040,6 +1143,15 @@ export class DealsService {
     console.log(`Deal closed successfully:`, { dealId, status: savedDeal.status })
     return savedDeal
   }
+
+
+
+
+
+
+
+
+
 
   async updateDealStatusByBuyer(
     dealId: string,
