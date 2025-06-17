@@ -1,3 +1,21 @@
+// import {
+//   Controller,
+//   Get,
+//   Post,
+//   Body,
+//   Patch,
+//   Param,
+//   Delete,
+//   UseGuards,
+//   Request,
+//   Res,
+//   Logger,
+//   HttpStatus,
+//   UnauthorizedException,
+//   ForbiddenException,
+//   Query,
+//   BadRequestException,
+// } from "@nestjs/common"
 import {
   Controller,
   Get,
@@ -15,7 +33,12 @@ import {
   ForbiddenException,
   Query,
   BadRequestException,
+  UseInterceptors,
+  UploadedFile,
 } from "@nestjs/common"
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
@@ -24,7 +47,7 @@ import { RegisterSellerDto } from "./dto/create-seller.dto"
 import { SellerGoogleAuthGuard } from "../auth/guards/seller-google-auth.guard"
 import { AuthService } from "../auth/auth.service"
 import { DealsService } from "../deals/deals.service"
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery } from "@nestjs/swagger"
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery, ApiConsumes, ApiBody } from "@nestjs/swagger"
 import { GoogleSellerLoginResult } from "../auth/interfaces/google-seller-login-result.interface"
 import { Response } from "express"
 import { ConfigService } from "@nestjs/config"
@@ -443,6 +466,84 @@ export class SellersController {
       throw error
     }
   }
+
+
+  @UseGuards(JwtAuthGuard)
+  @Post("upload-profile-picture")
+  @ApiBearerAuth()
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "Upload profile picture" })
+  @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        file: {
+          type: "string",
+          format: "binary",
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor("file", {
+      storage: diskStorage({
+        destination: "./uploads/profile-pictures",
+        filename: (req: any, file, cb) => {
+          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
+          const ext = extname(file.originalname)
+          const userId = req.user?.userId || req.user?.sub || "unknown"
+          cb(null, `seller-${userId}-${uniqueSuffix}${ext}`)
+        },
+      }),
+      fileFilter: (req, file, cb) => {
+        if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
+          return cb(new Error("Only image files are allowed!"), false)
+        }
+        cb(null, true)
+      },
+      limits: {
+        fileSize: 1024 * 1024 * 5, // 5MB limit
+      },
+    }),
+  )
+  async uploadProfilePicture(@Request() req: any, @UploadedFile() file: any) {
+    try {
+      if (!file) {
+        throw new BadRequestException('No file uploaded');
+      }
+
+      const sellerId = req.user?.userId || req.user?.sub;
+      if (!sellerId) {
+        throw new UnauthorizedException('User not authenticated');
+      }
+
+      const profilePicturePath = file.path;
+      const seller = await this.sellersService.updateProfilePicture(sellerId, profilePicturePath);
+
+      return {
+        message: "Profile picture uploaded successfully",
+        profilePicture: profilePicturePath,
+        seller: {
+          id: (seller as any)._id || (seller as any).id,
+          fullName: seller.fullName,
+          email: seller.email,
+          profilePicture: seller.profilePicture
+        }
+      };
+    } catch (error) {
+      this.logger.error(`Error uploading profile picture: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+
+
+
+
+
+
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")

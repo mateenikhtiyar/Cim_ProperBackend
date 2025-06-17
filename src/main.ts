@@ -2,12 +2,14 @@ import "./shims"
 import { NestFactory } from "@nestjs/core"
 import { ValidationPipe } from "@nestjs/common"
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger"
+import { NestExpressApplication } from '@nestjs/platform-express'
+import { join } from 'path'
 import { AppModule } from "./app.module"
 import * as fs from "fs"
 
 async function bootstrap() {
   try {
-    const app = await NestFactory.create(AppModule)
+    const app = await NestFactory.create<NestExpressApplication>(AppModule)
     let frontendUrl = process.env.FRONTEND_URL || "https://buyer.cimamplify.com/"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
@@ -31,6 +33,11 @@ async function bootstrap() {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true })
       }
+    })
+
+    // Serve static files for uploaded images
+    app.useStaticAssets(join(__dirname, '..', 'uploads'), {
+      prefix: '/uploads/',
     })
 
     // Fix CORS configuration
@@ -59,6 +66,7 @@ async function bootstrap() {
     console.log("MongoDB URI:", process.env.MONGODB_URI)
     console.log("Google Client ID configured:", !!process.env.GOOGLE_CLIENT_ID)
     console.log("Frontend URL configured as:", frontendUrl)
+    console.log("Static files will be served from: /uploads/")
     await app.listen(3001)
     console.log("Application running on port 3001")
     console.log("Swagger documentation available at: http://localhost:3001/api")
