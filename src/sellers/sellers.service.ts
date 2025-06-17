@@ -70,6 +70,25 @@ export class SellersService {
     }
   }
 
+
+  async updateProfilePicture(id: string, profilePicturePath: string): Promise<Seller> {
+    try {
+      const seller = await this.sellerModel.findById(id).exec();
+      if (!seller) {
+        throw new NotFoundException("Seller not found");
+      }
+
+      seller.profilePicture = profilePicturePath;
+      return seller.save();
+    } catch (error) {
+      this.logger.error(`Failed to update profile picture: ${error.message}`, error.stack);
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new BadRequestException("Failed to update profile picture");
+    }
+  }
+
   async findAll(): Promise<Seller[]> {
     try {
       return this.sellerModel.find().select('-password').exec();
