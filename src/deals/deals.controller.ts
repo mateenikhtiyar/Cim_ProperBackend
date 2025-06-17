@@ -12,6 +12,8 @@ import {
   UnauthorizedException,
   UseInterceptors,
   UploadedFiles,
+  ValidationPipe,
+  BadRequestException,
 } from "@nestjs/common"
 import { FilesInterceptor } from "@nestjs/platform-express"
 import { diskStorage } from "multer"
@@ -51,12 +53,50 @@ export class DealsController {
     schema: {
       type: "object",
       properties: {
-        title: { type: "string", example: "SaaS Company Acquisition Opportunity" },
-        companyDescription: { type: "string", example: "Established SaaS company..." },
-        dealType: { type: "string", enum: ["acquisition", "merger", "investment", "partnership", "other"] },
-        industrySector: { type: "string", example: "Technology" },
-        geographySelection: { type: "string", example: "United States" },
-        yearsInBusiness: { type: "number", example: 5 },
+        dealData: {
+          type: "string",
+          description: "JSON string containing all deal data",
+          example: JSON.stringify({
+            title: "SaaS Company Acquisition Opportunity",
+            companyDescription: "Established SaaS company with recurring revenue seeking acquisition.",
+            companyType: "SaaS Company",
+            dealType: "acquisition",
+            industrySector: "Technology",
+            geographySelection: "United States",
+            yearsInBusiness: 5,
+            employeeCount: 50,
+            financialDetails: {
+              trailingRevenueAmount: 1000000,
+              trailingRevenueCurrency: "USD($)",
+              trailingEBITDAAmount: 250000,
+              trailingEBITDACurrency: "USD($)",
+              t12FreeCashFlow: 180000,
+              t12NetIncome: 200000,
+              avgRevenueGrowth: 42,
+              netIncome: 200000,
+              askingPrice: 5000000
+            },
+            businessModel: {
+              recurringRevenue: true,
+              assetLight: true,
+              projectBased: false,
+              assetHeavy: false
+            },
+            managementPreferences: {
+              retiringDivesting: true,
+              staffStay: true
+            },
+            buyerFit: {
+              capitalAvailability: "Ready to deploy immediately",
+              minPriorAcquisitions: 2,
+              minTransactionSize: 1000000
+            },
+            tags: ["growth opportunity", "recurring revenue", "saas"],
+            isPublic: false,
+            isFeatured: false,
+            stakePercentage: 100
+          })
+        },
         files: {
           type: "array",
           items: {
@@ -65,7 +105,6 @@ export class DealsController {
           },
           description: "Optional documents to upload with the deal",
         },
-        // Add other fields as needed
       },
     },
   })
@@ -94,7 +133,7 @@ export class DealsController {
     }),
   )
   async create(
-    @Body() createDealDto: CreateDealDto,
+    @Body() body: { dealData: string },
     @Request() req: RequestWithUser,
     @UploadedFiles() files?: Express.Multer.File[]
   ) {
@@ -102,32 +141,41 @@ export class DealsController {
       throw new UnauthorizedException("User not authenticated")
     }
 
+    // Parse the JSON deal data
+    let createDealDto: CreateDealDto
+    try {
+      createDealDto = JSON.parse(body.dealData)
+    } catch (error) {
+      throw new BadRequestException("Invalid JSON in dealData field")
+    }
+
     // Process uploaded files and get their paths
     const documentPaths: string[] = []
     if (files && files.length > 0) {
       files.forEach(file => {
-        // Store the relative path from your uploads directory
         const relativePath = `uploads/deal-documents/${file.filename}`
         documentPaths.push(relativePath)
-
-        // Or if you want to store just the filename
-        // documentPaths.push(file.filename)
-
         console.log(`File uploaded: ${file.originalname} -> ${file.filename}`)
       })
     }
 
-    // Create the deal with uploaded document paths
+    // Add the uploaded document paths and seller info
     const dealWithSellerAndDocuments = {
       ...createDealDto,
       seller: req.user.userId,
-      documents: documentPaths // Add the uploaded file paths to the documents array
+      documents: documentPaths
     }
 
-    const deal = await this.dealsService.create(dealWithSellerAndDocuments)
+    // Validate the DTO
+    const validationPipe = new ValidationPipe({ transform: true })
+    const validatedDto = await validationPipe.transform(dealWithSellerAndDocuments, {
+      type: 'body',
+      metatype: CreateDealDto
+    })
+
+    const deal = await this.dealsService.create(validatedDto)
     return deal
   }
-  
 
   
   @UseGuards(JwtAuthGuard, RolesGuard)

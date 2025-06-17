@@ -21,31 +21,7 @@ export class DealsService {
     @InjectModel(Deal.name) private dealModel: Model<DealDocument>
   ) { }
 
-  // async create(createDealDto: CreateDealDto): Promise<Deal> {
-  //   try {
-  //     // Log the incoming data for debugging
-  //     console.log("Creating deal with data:", JSON.stringify(createDealDto, null, 2))
 
-  //     // Ensure documents field is properly set
-  //     const dealData = {
-  //       ...createDealDto,
-  //       documents: createDealDto.documents || [], // Ensure it's an array
-  //       createdAt: new Date(),
-  //       updatedAt: new Date(),
-  //     }
-
-  //     console.log("Final deal data:", JSON.stringify(dealData, null, 2))
-
-  //     const createdDeal = new this.dealModel(dealData)
-  //     const savedDeal = await createdDeal.save()
-
-  //     console.log("Saved deal:", JSON.stringify(savedDeal, null, 2))
-  //     return savedDeal
-  //   } catch (error) {
-  //     console.error("Error creating deal:", error)
-  //     throw error
-  //   }
-  // }
   async create(createDealDto: CreateDealDto): Promise<Deal> {
     try {
       // Log the incoming data for debugging
