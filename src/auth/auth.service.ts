@@ -75,6 +75,8 @@ export class AuthService {
           id: userId,
           email: user.email,
           fullName: user.fullName,
+          phone: user.phone || null,
+          companyProfileId: user.companyProfileId ? user.companyProfileId.toString() : null,
           companyName: user.companyName,
           profilePicture: user.profilePicture,
           role: user.role || "buyer",
