@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose"
-import { Document } from "mongoose"
+import { Document, Types } from "mongoose"
 import { ApiProperty } from "@nestjs/swagger"
 
 export interface BuyerDocument extends Buyer, Document {
@@ -21,13 +21,13 @@ export class Buyer {
   @Prop({ required: true })
   password: string
 
-  // @ApiProperty({ description: "Company name of the buyer" })
-  // @Prop({ required: true })
-  // companyName: string
-
   @ApiProperty({ description: "Role of the user", default: "buyer" })
   @Prop({ default: "buyer" })
   role: string
+
+  @ApiProperty({ description: "Reference to the company profile", nullable: true })
+  @Prop({ type: Types.ObjectId, ref: "CompanyProfile", default: null })
+  companyProfileId: Types.ObjectId
 
   @ApiProperty({ description: "Profile picture path", nullable: true })
   @Prop({ default: null })
@@ -40,6 +40,14 @@ export class Buyer {
   @ApiProperty({ description: "Google ID for OAuth accounts", nullable: true })
   @Prop({ default: null })
   googleId: string
+
+  @ApiProperty({ description: "Reset token for password recovery", nullable: true })
+  @Prop({ default: null })
+  resetPasswordToken: string
+
+  @ApiProperty({ description: "Token expiry timestamp", nullable: true })
+  @Prop({ default: null })
+  resetPasswordExpires: Date
 
   // Ensure Mongoose methods are properly typed
   toObject?(): any

@@ -4,12 +4,17 @@ import { InjectModel } from "@nestjs/mongoose"
 import { CompanyProfile, CompanyProfileDocument } from "./schemas/company-profile.schema"
 import { CreateCompanyProfileDto } from "./dto/create-company-profile.dto"
 import { UpdateCompanyProfileDto } from "./dto/update-company-profile.dto"
+import { Buyer, BuyerDocument } from "../buyers/schemas/buyer.schema" // adjust path if needed
+
 
 @Injectable()
 export class CompanyProfileService {
   constructor(
     @InjectModel(CompanyProfile.name)
-    private companyProfileModel: Model<CompanyProfileDocument>
+    private companyProfileModel: Model<CompanyProfileDocument>,
+
+    @InjectModel(Buyer.name)
+    private buyerModel: Model<BuyerDocument>
   ) { }
 
   async create(buyerId: string, createCompanyProfileDto: CreateCompanyProfileDto): Promise<CompanyProfile> {
@@ -18,24 +23,32 @@ export class CompanyProfileService {
     if (existingProfile) {
       throw new ForbiddenException("Buyer already has a company profile")
     }
-
-    // Ensure the targetCriteria fields are properly initialized
+  
+    // Initialize target criteria arrays if undefined
     const targetCriteria = createCompanyProfileDto.targetCriteria || {}
     if (!targetCriteria.countries) targetCriteria.countries = []
     if (!targetCriteria.industrySectors) targetCriteria.industrySectors = []
     if (!targetCriteria.preferredBusinessModels) targetCriteria.preferredBusinessModels = []
     if (!targetCriteria.managementTeamPreference) targetCriteria.managementTeamPreference = []
-
-    // Create new profile with properly initialized fields
+  
+    // Create new profile
     const newCompanyProfile = new this.companyProfileModel({
       ...createCompanyProfileDto,
       buyer: buyerId,
       targetCriteria,
       selectedCurrency: createCompanyProfileDto.selectedCurrency || "USD",
     })
-
-    return newCompanyProfile.save()
+  
+    const savedProfile = await newCompanyProfile.save()
+  
+    // ✅ Update buyer document with companyProfileId
+    await this.buyerModel.findByIdAndUpdate(buyerId, {
+      companyProfileId: savedProfile._id
+    })
+  
+    return savedProfile
   }
+  
 
   async findOne(id: string): Promise<CompanyProfile> {
     const companyProfile = await this.companyProfileModel.findById(id).exec()

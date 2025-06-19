@@ -61,6 +61,14 @@ export class Seller {
   @Prop({ default: null })
   googleId!: string;
 
+  @ApiProperty({ description: "Reset token for password recovery", nullable: true })
+  @Prop({ default: null })
+  resetPasswordToken: string
+
+  @ApiProperty({ description: "Token expiry timestamp", nullable: true })
+  @Prop({ default: null })
+  resetPasswordExpires: Date
+
   // Add any additional fields needed
 
   // Ensure Mongoose methods are properly typed

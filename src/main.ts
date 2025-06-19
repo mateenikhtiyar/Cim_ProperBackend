@@ -9,8 +9,8 @@ import * as fs from "fs"
 
 async function bootstrap() {
   try {
-    const app = await NestFactory.create<NestExpressApplication>(AppModule)
-    let frontendUrl = process.env.FRONTEND_URL || "https://buyer.cimamplify.com/"
+    const app = await NestFactory.create(AppModule)
+    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3001/"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
@@ -34,15 +34,9 @@ async function bootstrap() {
         fs.mkdirSync(dir, { recursive: true })
       }
     })
-
-    // Serve static files for uploaded images
-    app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-      prefix: '/uploads/',
-    })
-
     // Fix CORS configuration
     app.enableCors({
-      origin: frontendUrl,
+      origin: ["http://localhost:3000"],
       credentials: true,
     })
 
