@@ -10,6 +10,7 @@ import { GoogleStrategy } from "./strategies/google.strategy"
 import { SellerGoogleStrategy } from "./strategies/seller-google.strategy"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { SharedModule } from "../shared.module"
+import { MailService } from "mail/mail.service"
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { SharedModule } from "../shared.module"
     AuthService,
     LocalStrategy,
     JwtStrategy,
+    MailService,
     GoogleStrategy,
     SellerGoogleStrategy,
     RolesGuard,

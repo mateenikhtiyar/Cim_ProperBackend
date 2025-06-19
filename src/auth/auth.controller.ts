@@ -1,4 +1,4 @@
-import { Controller, Post, UseGuards, Request, Get } from "@nestjs/common"
+import { Body, Controller, Post, UseGuards, Request, Get, Patch, BadRequestException, ValidationPipe, UsePipes, HttpStatus, HttpCode } from "@nestjs/common"
 import { AuthService } from "./auth.service"
 import { LocalAuthGuard } from "./guards/local-auth.guard"
 import { JwtAuthGuard } from "./guards/jwt-auth.guard"
@@ -9,11 +9,13 @@ import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
 import { LoginAdminDto } from "./dto/login-admin.dto"
 import { LoginSellerDto } from "./dto/login-seller.dto"
+import { ForgotPasswordDto } from './dto/forgot-password.dto'
+import { ResetPasswordDto } from './dto/reset-password.dto'
 
 @ApiTags("auth")
 @Controller("auth")
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(private authService: AuthService) { }
 
   @UseGuards(LocalAuthGuard)
   @Post('login')
@@ -94,4 +96,28 @@ export class AuthController {
   googleAuthRedirect(@Request() req: any) {
     return this.authService.loginWithGoogle(req.user);
   }
+
+  @Post('buyer/forgot-password')
+  forgotPasswordBuyer(@Body() body: { email: string }) {
+    return this.authService.forgotPasswordBuyer(body.email)
+  }
+  
+  @Patch('buyer/reset-password')
+  resetPasswordBuyer(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPasswordBuyer(dto)
+  }
+  
+  @Post('seller/forgot-password')
+  forgotPasswordSeller(@Body() body: { email: string }) {
+    return this.authService.forgotPasswordSeller(body.email)
+  }
+  
+  @Patch('seller/reset-password')
+  resetPasswordSeller(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPasswordSeller(dto)
+  }
+  
+
+
+
 }
