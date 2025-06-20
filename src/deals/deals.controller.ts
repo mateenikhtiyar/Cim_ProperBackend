@@ -36,6 +36,15 @@ interface RequestWithUser extends Request {
   }
 }
 
+interface DocumentInfo {
+  filename: string;
+  originalName: string;
+  path: string;
+  size: number;
+  mimetype: string;
+  uploadedAt: Date;
+}
+
 @ApiTags("deals")
 @Controller("deals")
 export class DealsController {
@@ -138,43 +147,37 @@ export class DealsController {
     @UploadedFiles() files?: Express.Multer.File[]
   ) {
     if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
+      throw new UnauthorizedException('User not authenticated')
     }
-
-    // Parse the JSON deal data
+  
     let createDealDto: CreateDealDto
     try {
       createDealDto = JSON.parse(body.dealData)
-    } catch (error) {
-      throw new BadRequestException("Invalid JSON in dealData field")
+    } catch {
+      throw new BadRequestException('Invalid JSON in dealData field')
     }
-
-    // Process uploaded files and get their paths
-    const documentPaths: string[] = []
-    if (files && files.length > 0) {
-      files.forEach(file => {
-        const relativePath = `uploads/deal-documents/${file.filename}`
-        documentPaths.push(relativePath)
-        console.log(`File uploaded: ${file.originalname} -> ${file.filename}`)
-      })
-    }
-
-    // Add the uploaded document paths and seller info
-    const dealWithSellerAndDocuments = {
+  
+    // Gather uploaded file data
+    const documents = files?.map((file) => ({
+      filename: file.filename,
+      originalName: file.originalname,
+      path: file.path,
+      size: file.size,
+      mimetype: file.mimetype,
+      uploadedAt: new Date(),
+    })) || []
+  
+    // Merge seller and documents into the DTO
+    const dealWithSellerAndDocuments: CreateDealDto = {
       ...createDealDto,
       seller: req.user.userId,
-      documents: documentPaths
+      // If you changed your schema's `documents` to accept an array of `DocumentInfo`,
+      // this will work; if it's just file paths, do: documents.map(doc => doc.path)
+      documents,
     }
-
-    // Validate the DTO
-    const validationPipe = new ValidationPipe({ transform: true })
-    const validatedDto = await validationPipe.transform(dealWithSellerAndDocuments, {
-      type: 'body',
-      metatype: CreateDealDto
-    })
-
-    const deal = await this.dealsService.create(validatedDto)
-    return deal
+  
+    // Save the deal
+    return this.dealsService.create(dealWithSellerAndDocuments)
   }
 
   
