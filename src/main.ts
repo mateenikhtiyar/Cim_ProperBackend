@@ -9,7 +9,7 @@ import * as fs from "fs"
 
 async function bootstrap() {
   try {
-    const app = await NestFactory.create(AppModule)
+    const app = await NestFactory.create<NestExpressApplication>(AppModule); 
     let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3001/"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
@@ -28,12 +28,16 @@ async function bootstrap() {
     )
 
     // Ensure uploads directory exists
+    
     const uploadDirs = ["./uploads", "./uploads/profile-pictures", "./uploads/deal-documents"]
     uploadDirs.forEach((dir) => {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true })
       }
     })
+    app.useStaticAssets(join(__dirname, '..', 'uploads'), {
+      prefix: '/uploads',
+    });
     // Fix CORS configuration
     app.enableCors({
       origin: ["http://localhost:3000"],

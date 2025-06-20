@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger"
-import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max } from "class-validator"
+import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max, IsDate } from "class-validator"
 import { Type } from "class-transformer"
 import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
 
@@ -125,6 +125,15 @@ export class CreateDealWithFilesDto {
   files?: any[]
 }
 
+export interface DocumentInfo {
+  filename: string;
+  originalName: string;
+  path: string;
+  size: number;
+  mimetype: string;
+  uploadedAt: Date;
+}
+
 export class CreateDealDto {
   @ApiProperty({ description: "Title of the deal", example: "SaaS Company Acquisition Opportunity" })
   @IsString()
@@ -234,11 +243,10 @@ export class CreateDealDto {
   @IsOptional()
   stakePercentage?: number
 
-  @ApiProperty({ description: "Documents uploaded for the deal", type: [String], required: false })
+  @ApiProperty({ description: "Documents uploaded for the deal", type: [Object], required: false })
   @IsArray()
-  @IsString({ each: true })
   @IsOptional()
-  documents?: string[]
+  documents?: DocumentInfo[];
 
   // Add seller field - this will be populated by the controller
   @ApiProperty({ description: "Seller ID", required: false })
