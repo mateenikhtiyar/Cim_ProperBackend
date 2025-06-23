@@ -156,7 +156,20 @@ export class DealsService {
 
     deal.timeline.updatedAt = new Date()
 
-    Object.assign(deal, updateDealDto)
+    // Handle documents preservation explicitly
+    const updateData = { ...updateDealDto }
+
+    // If documents array is provided, use it; otherwise preserve existing documents
+    if (updateDealDto.documents !== undefined) {
+      // If documents is an empty array, it means clear all documents
+      // If it has values, replace with new documents
+      updateData.documents = updateDealDto.documents
+    } else {
+      // If documents field is not provided, preserve existing documents
+      delete updateData.documents
+    }
+
+    Object.assign(deal, updateData)
     return deal.save()
   }
 
@@ -1211,10 +1224,14 @@ export class DealsService {
       // Remove the deal status restriction for active buyer deals
       delete baseQuery.$or
       baseQuery.targetedBuyers = buyerId
+      // Exclude completed deals unless specifically requested
+      baseQuery.status = { $ne: DealStatus.COMPLETED }
     } else if (status === "rejected") {
       // Deals that were targeted to buyer but they rejected
       baseQuery.targetedBuyers = buyerId
       baseQuery.interestedBuyers = { $ne: buyerId }
+      // Exclude completed deals unless specifically requested
+      baseQuery.status = { $ne: DealStatus.COMPLETED }
 
       // Check invitation status for explicit rejections
       baseQuery.$or = [{ [`invitationStatus.${buyerId}.response`]: "rejected" }]
@@ -1224,6 +1241,8 @@ export class DealsService {
     } else if (status === "pending") {
       // Deals targeted to buyer but no response yet, or explicitly set as pending
       baseQuery.targetedBuyers = buyerId
+      // Exclude completed deals unless specifically requested
+      baseQuery.status = { $ne: DealStatus.COMPLETED }
       baseQuery.$and = [
         {
           $or: [{ interestedBuyers: { $ne: buyerId } }, { [`invitationStatus.${buyerId}.response`]: "pending" }],
@@ -1232,6 +1251,9 @@ export class DealsService {
           [`invitationStatus.${buyerId}.response`]: { $ne: "rejected" },
         },
       ]
+    } else {
+      // Default case: exclude completed deals (similar to findBySeller behavior)
+      baseQuery.status = { $ne: DealStatus.COMPLETED }
     }
 
     console.log(`Query for ${status} deals:`, JSON.stringify(baseQuery, null, 2))
