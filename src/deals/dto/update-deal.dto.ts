@@ -116,7 +116,12 @@ export class UpdateDealDto {
   @IsOptional()
   stakePercentage?: number
 
-  @ApiProperty({ description: "Documents uploaded for the deal", type: [String], required: false })
+  @ApiProperty({
+    description:
+      "Documents for the deal - if provided, replaces existing documents; if omitted, preserves existing documents",
+    type: [String],
+    required: false,
+  })
   @IsArray()
   @IsString({ each: true })
   @IsOptional()
