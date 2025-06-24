@@ -43,4 +43,20 @@ export class UpdateSellerDto {
   @IsString()
   @MinLength(6, { message: "Password must be at least 6 characters long" })
   password?: string;
+
+  @ApiPropertyOptional({
+    example: "CEO",
+    description: "Title of the seller"
+  })
+  @IsOptional()
+  @IsString()
+  title?: string;
+
+  @ApiPropertyOptional({
+    example: "https://acme.com",
+    description: "Website of the seller"
+  })
+  @IsOptional()
+  @IsString()
+  website?: string;
 }

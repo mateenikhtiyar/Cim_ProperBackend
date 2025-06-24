@@ -106,18 +106,19 @@ class ManagementPreferences {
 
 @Schema()
 class BuyerFit {
-  @ApiProperty({ description: "Capital Availability", enum: CapitalAvailability })
-  @Prop({ type: String, enum: CapitalAvailability })
-  capitalAvailability?: CapitalAvailability
+  @ApiProperty({ description: "Capital Availability", isArray: true, enum: CapitalAvailability })
+  @Prop({ type: [String], enum: CapitalAvailability })
+  capitalAvailability?: CapitalAvailability[]
 
   @ApiProperty({ description: "Minimum number of prior acquisitions" })
   @Prop({ required: false })
-  minPriorAcquisitions?: number
+  minPriorAcquisitions?: number;
 
   @ApiProperty({ description: "Minimum transaction size ($)" })
   @Prop({ required: false })
-  minTransactionSize?: number
+  minTransactionSize?: number;
 }
+
 
 @Schema()
 class DealTimeline {
@@ -176,8 +177,9 @@ export class Deal {
   companyDescription!: string
 
   @ApiProperty({ description: "Type of company", example: "SaaS Company" })
-  @Prop({ required: false })
-  companyType?: string
+  @Prop({ type: [String], required: false })
+companyType?: string[];
+
 
   @ApiProperty({ description: "Type of deal", enum: DealType })
   @Prop({ required: true, enum: DealType })

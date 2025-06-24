@@ -161,7 +161,7 @@ export class DealsController {
     const documents = files?.map((file) => ({
       filename: file.filename,
       originalName: file.originalname,
-      path: file.path,
+      path: file.path.replace(/^uploads[\\/]/, ''),
       size: file.size,
       mimetype: file.mimetype,
       uploadedAt: new Date(),
@@ -295,7 +295,7 @@ export class DealsController {
     const index = Number.parseInt(documentIndex, 10)
     const updatedDeal = await this.dealsService.removeDocument(dealId, index)
 
-    return { message: "Document removed successfully" }
+    return updatedDeal;
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

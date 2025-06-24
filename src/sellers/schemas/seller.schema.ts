@@ -29,6 +29,14 @@ export class Seller {
   @Prop({ required: true })
   fullName!: string;
 
+  @ApiProperty({ description: "Title of the seller" })
+  @Prop({ required: false })
+  title!: string;
+
+  @ApiProperty({ description: "Website of the seller" })
+  @Prop({ required: false })
+  website!: string;
+
   @ApiProperty({ description: "Email address of the seller" })
   @Prop({ required: true, unique: true })
   email!: string;

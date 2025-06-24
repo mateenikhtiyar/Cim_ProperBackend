@@ -132,33 +132,70 @@ export class DealsService {
     deal.documents.splice(documentIndex, 1)
     deal.timeline.updatedAt = new Date()
 
-    return deal.save()
+    return await this.findOne(dealId);
   }
 
   async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promise<Deal> {
-    const deal = await this.dealModel.findById(id).exec()
-
+    const deal = await this.dealModel.findById(id).exec();
+  
     if (!deal) {
-      throw new NotFoundException(`Deal with ID ${id} not found`)
+      throw new NotFoundException(`Deal with ID ${id} not found`);
     }
-
+  
     if (deal.seller.toString() !== sellerId) {
-      throw new ForbiddenException("You don't have permission to update this deal")
+      throw new ForbiddenException("You don't have permission to update this deal");
     }
 
+    // LOGGING: Log incoming documents and existing documents
+    console.log("[UPDATE] Incoming updateDealDto.documents:", JSON.stringify(updateDealDto.documents));
+    if (Array.isArray(updateDealDto.documents) && updateDealDto.documents.length > 0) {
+      console.log("[UPDATE] Type of first element in documents:", typeof updateDealDto.documents[0]);
+    }
+    console.log("[UPDATE] Existing deal.documents before update:", JSON.stringify(deal.documents));
+  
+    // Set timeline updates
     if (updateDealDto.status === DealStatus.ACTIVE && deal.status !== DealStatus.ACTIVE) {
-      deal.timeline.publishedAt = new Date()
+      deal.timeline.publishedAt = new Date();
     }
-
     if (updateDealDto.status === DealStatus.COMPLETED && deal.status !== DealStatus.COMPLETED) {
-      deal.timeline.completedAt = new Date()
+      deal.timeline.completedAt = new Date();
+    }
+    deal.timeline.updatedAt = new Date();
+  
+    // ⭐ IMPORTANT: Only merge documents if they were provided
+    if (Array.isArray(updateDealDto.documents) && updateDealDto.documents.length > 0) {
+      // If the payload is an array of strings (filenames)
+      if (typeof updateDealDto.documents[0] === "string") {
+        deal.documents = (deal.documents || []).filter((doc: any) =>
+          (updateDealDto.documents as string[]).includes(doc.filename)
+        );
+      } else {
+        // If the payload is an array of objects (with filename)
+        const existingDocs = deal.documents || [];
+        const updatedDocs = (updateDealDto.documents as any[]).map((incomingDoc: any) => {
+          const existingDoc = existingDocs.find((d: any) => d.filename === incomingDoc.filename);
+          return existingDoc ? { ...existingDoc, ...incomingDoc } : incomingDoc;
+        });
+        const nonUpdatedDocs = existingDocs.filter(
+          (d: any) => !(updateDealDto.documents as any[]).some((incomingDoc: any) => incomingDoc.filename === d.filename)
+        );
+        deal.documents = [...updatedDocs, ...nonUpdatedDocs];
+      }
     }
 
-    deal.timeline.updatedAt = new Date()
-
-    Object.assign(deal, updateDealDto)
-    return deal.save()
+    // LOGGING: Log resulting deal.documents after update
+    console.log("[UPDATE] Resulting deal.documents after update:", JSON.stringify(deal.documents));
+  
+    // Assign other fields
+    Object.assign(
+      deal,
+      // Filter out `documents` so Object.assign doesn't accidentally erase
+      { ...updateDealDto, documents: undefined }
+    );
+  
+    return deal.save();
   }
+  
 
   async remove(id: string, sellerId: string): Promise<void> {
     const deal = await this.dealModel.findById(id).exec()

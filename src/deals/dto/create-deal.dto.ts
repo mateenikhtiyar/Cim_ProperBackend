@@ -92,13 +92,16 @@ export class ManagementPreferencesDto {
 export class BuyerFitDto {
   @ApiProperty({
     description: "Capital Availability",
+    isArray: true,
     enum: CapitalAvailability,
-    example: "Ready to deploy immediately",
+    example: [CapitalAvailability.READY, CapitalAvailability.NEED],
     required: false,
   })
-  @IsEnum(CapitalAvailability)
+  @IsArray()
+  @IsEnum(CapitalAvailability, { each: true })
   @IsOptional()
-  capitalAvailability?: CapitalAvailability
+  capitalAvailability?: CapitalAvailability[];
+  
 
   @ApiProperty({ description: "Minimum number of prior acquisitions", required: false })
   @IsNumber()
@@ -146,10 +149,10 @@ export class CreateDealDto {
   @IsString()
   companyDescription: string
 
-  @ApiProperty({ description: "Type of company", example: "SaaS Company", required: false })
+  @ApiProperty({ description: "Type of company", example: "SaaS Company", required: true })
   @IsString()
   @IsOptional()
-  companyType?: string
+  companyType: string[];
 
   @ApiProperty({ description: "Type of deal", enum: DealType, example: DealType.ACQUISITION })
   @IsEnum(DealType)

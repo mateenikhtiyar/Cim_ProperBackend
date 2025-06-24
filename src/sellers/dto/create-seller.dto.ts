@@ -26,6 +26,16 @@ export class GoogleSellerDto {
   @IsString()
   @IsOptional()
   companyName?: string;
+
+  @ApiProperty({ example: "CEO", description: "Title of the seller", required: false })
+  @IsString()
+  @IsOptional()
+  title?: string;
+
+  @ApiProperty({ example: "https://acme.com", description: "Website of the seller", required: false })
+  @IsString()
+  @IsOptional()
+  website?: string;
 }
 
 export class RegisterSellerDto {
@@ -48,4 +58,14 @@ export class RegisterSellerDto {
   @IsString()
   @IsNotEmpty()
   companyName: string;
+
+  @ApiProperty({ example: "CEO", description: "Title of the seller", required: false })
+  @IsString()
+  @IsOptional()
+  title?: string;
+
+  @ApiProperty({ example: "https://acme.com", description: "Website of the seller", required: false })
+  @IsString()
+  @IsOptional()
+  website?: string;
 }

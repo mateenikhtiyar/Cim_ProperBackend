@@ -1,8 +1,17 @@
 import { ApiProperty } from "@nestjs/swagger"
-import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max } from "class-validator"
+import { 
+  IsString, IsEnum, IsArray, IsBoolean, 
+  IsOptional, IsNumber, ValidateNested, Min, Max 
+} from "class-validator"
 import { Type } from "class-transformer"
 import { DealStatus, DealType, DealVisibility } from "../schemas/deal.schema"
 import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto } from "./create-deal.dto"
+
+// Define the CapitalAvailability Enum
+export enum CapitalAvailability {
+  READY = "Ready to deploy immediately",
+  NEED_RAISE = "Need to raise",
+}
 
 export class UpdateDealDto {
   @ApiProperty({ description: "Title of the deal", example: "SaaS Company Acquisition Opportunity", required: false })
@@ -10,19 +19,22 @@ export class UpdateDealDto {
   @IsOptional()
   title?: string
 
-  @ApiProperty({
-    description: "Description of the company",
-    example: "Established SaaS company with recurring revenue seeking acquisition.",
-    required: false,
-  })
+  @ApiProperty({ description: "Description of the company", example: "Established SaaS company with recurring revenue seeking acquisition.", required: false })
   @IsString()
   @IsOptional()
   companyDescription?: string
 
-  @ApiProperty({ description: "Type of company", example: "SaaS Company", required: false })
-  @IsString()
+  @ApiProperty({ description: "Type of company", example: "SaaS Company", isArray: true, required: false })
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
-  companyType?: string
+  companyType?: string[]
+
+  @ApiProperty({ description: "Buyer capital availability options", isArray: true, enum: CapitalAvailability, required: false })
+  @IsArray()
+  @IsEnum(CapitalAvailability, { each: true })
+  @IsOptional()
+  capitalAvailability?: CapitalAvailability[]
 
   @ApiProperty({ description: "Type of deal", enum: DealType, example: DealType.ACQUISITION, required: false })
   @IsEnum(DealType)
@@ -89,11 +101,7 @@ export class UpdateDealDto {
   @IsOptional()
   targetedBuyers?: string[]
 
-  @ApiProperty({
-    description: "Tags for categorizing the deal",
-    example: ["growth opportunity", "recurring revenue"],
-    required: false,
-  })
+  @ApiProperty({ description: "Tags for categorizing the deal", example: ["growth opportunity", "recurring revenue"], required: false })
   @IsArray()
   @IsString({ each: true })
   @IsOptional()
@@ -120,7 +128,7 @@ export class UpdateDealDto {
   @IsArray()
   @IsString({ each: true })
   @IsOptional()
-  documents?: string[]
+  documents?: string[];
 
   @ApiProperty({ description: "Final sale price (for completed deals)", example: 4800000, required: false })
   @IsNumber()
