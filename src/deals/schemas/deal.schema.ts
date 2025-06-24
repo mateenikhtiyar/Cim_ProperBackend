@@ -106,9 +106,9 @@ class ManagementPreferences {
 
 @Schema()
 class BuyerFit {
-  @ApiProperty({ description: "Capital Availability", enum: CapitalAvailability })
-  @Prop({ type: String, enum: CapitalAvailability })
-  capitalAvailability?: CapitalAvailability
+  @ApiProperty({ description: "Capital Availability options", enum: CapitalAvailability, isArray: true })
+  @Prop({ type: [String], enum: CapitalAvailability, default: [] })
+  capitalAvailability?: CapitalAvailability[]
 
   @ApiProperty({ description: "Minimum number of prior acquisitions" })
   @Prop({ required: false })

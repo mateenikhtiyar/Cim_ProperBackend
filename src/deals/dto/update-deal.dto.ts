@@ -1,8 +1,32 @@
 import { ApiProperty } from "@nestjs/swagger"
 import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max } from "class-validator"
 import { Type } from "class-transformer"
-import { DealStatus, DealType, DealVisibility } from "../schemas/deal.schema"
+import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
 import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto } from "./create-deal.dto"
+
+export class UpdateBuyerFitDto {
+  @ApiProperty({
+    description: "Capital Availability options",
+    enum: CapitalAvailability,
+    isArray: true,
+    example: ["Ready to deploy immediately", "Need to raise"],
+    required: false,
+  })
+  @IsArray()
+  @IsEnum(CapitalAvailability, { each: true })
+  @IsOptional()
+  capitalAvailability?: CapitalAvailability[]
+
+  @ApiProperty({ description: "Minimum number of prior acquisitions", required: false })
+  @IsNumber()
+  @IsOptional()
+  minPriorAcquisitions?: number
+
+  @ApiProperty({ description: "Minimum transaction size ($)", required: false })
+  @IsNumber()
+  @IsOptional()
+  minTransactionSize?: number
+}
 
 export class UpdateDealDto {
   @ApiProperty({ description: "Title of the deal", example: "SaaS Company Acquisition Opportunity", required: false })
@@ -77,11 +101,11 @@ export class UpdateDealDto {
   @IsOptional()
   managementPreferences?: ManagementPreferencesDto
 
-  @ApiProperty({ description: "Buyer fit details", type: BuyerFitDto, required: false })
+  @ApiProperty({ description: "Buyer fit details", type: UpdateBuyerFitDto, required: false })
   @ValidateNested()
-  @Type(() => BuyerFitDto)
+  @Type(() => UpdateBuyerFitDto)
   @IsOptional()
-  buyerFit?: BuyerFitDto
+  buyerFit?: UpdateBuyerFitDto
 
   @ApiProperty({ description: "Targeted buyer IDs", type: [String], required: false })
   @IsArray()
