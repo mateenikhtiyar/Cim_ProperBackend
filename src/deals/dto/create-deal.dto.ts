@@ -91,14 +91,16 @@ export class ManagementPreferencesDto {
 
 export class BuyerFitDto {
   @ApiProperty({
-    description: "Capital Availability",
+    description: "Capital Availability options",
     enum: CapitalAvailability,
-    example: "Ready to deploy immediately",
+    isArray: true,
+    example: ["Ready to deploy immediately", "Need to raise"],
     required: false,
   })
-  @IsEnum(CapitalAvailability)
+  @IsArray()
+  @IsEnum(CapitalAvailability, { each: true })
   @IsOptional()
-  capitalAvailability?: CapitalAvailability
+  capitalAvailability?: CapitalAvailability[]
 
   @ApiProperty({ description: "Minimum number of prior acquisitions", required: false })
   @IsNumber()
