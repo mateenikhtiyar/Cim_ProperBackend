@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEmail, IsOptional, IsString, MinLength } from "class-validator";
+import { IsEmail, IsOptional, IsString, IsUrl, MinLength } from "class-validator";
 
 export class UpdateSellerDto {
   @ApiPropertyOptional({
@@ -43,4 +43,14 @@ export class UpdateSellerDto {
   @IsString()
   @MinLength(6, { message: "Password must be at least 6 characters long" })
   password?: string;
+
+
+  @ApiPropertyOptional({
+    example: "https://www.acmeinc.com",
+    description: "Company website URL"
+  })
+  @IsOptional()
+  @IsUrl({}, { message: "Website must be a valid URL" })
+  website?: string;
+
 }
