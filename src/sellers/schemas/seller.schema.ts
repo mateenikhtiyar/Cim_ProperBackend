@@ -41,6 +41,10 @@ export class Seller {
   @Prop({ required: true })
   password!: string;
 
+  @ApiProperty({ description: "Hashed password of the seller" })
+  @Prop({ required: false })
+  title?: string;
+
   @ApiProperty({ description: "Company name of the seller" })
   @Prop({ required: true })
   companyName!: string;
