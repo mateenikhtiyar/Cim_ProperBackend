@@ -458,8 +458,8 @@ export class DealsService {
               $cond: [
                 {
                   $and: [
-                    { $eq: [{ $ifNull: [deal.managementPreferences?.retiringDivesting, false] }, true] },
-                    { $in: ["Owner(s) Departing", { $ifNull: ["$targetCriteria.managementTeamPreference", []] }] },
+                    { $ne: [{ $ifNull: ["$managementPreferences", ""] }, ""] },
+                    { $in: ["Owner(s) Departing", { $ifNull: ["$targetCriteria.managementTeamPreference", []] }] }
                   ],
                 },
                 6, // Bonus points for management preference match
