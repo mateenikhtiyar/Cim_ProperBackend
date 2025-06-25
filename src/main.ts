@@ -6,16 +6,14 @@ import { NestExpressApplication } from '@nestjs/platform-express'
 import { join } from 'path'
 import { AppModule } from "./app.module"
 import * as fs from "fs"
-
 async function bootstrap() {
   try {
-    const app = await NestFactory.create<NestExpressApplication>(AppModule); 
-    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3001/"
+    const app = await NestFactory.create<NestExpressApplication>(AppModule);
+    let frontendUrl = process.env.FRONTEND_URL || "https://buyer.cimamplify.com/"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
     }
-
     app.useGlobalPipes(
       new ValidationPipe({
         transform: true,
@@ -26,9 +24,7 @@ async function bootstrap() {
         },
       }),
     )
-
     // Ensure uploads directory exists
-    
     const uploadDirs = ["./uploads", "./uploads/profile-pictures", "./uploads/deal-documents"]
     uploadDirs.forEach((dir) => {
       if (!fs.existsSync(dir)) {
@@ -40,10 +36,9 @@ async function bootstrap() {
     });
     // Fix CORS configuration
     app.enableCors({
-      origin: ["http://localhost:3000"],
+      origin: ["https://buyer.cimamplify.com"],
       credentials: true,
     })
-
     // Setup Swagger
     const config = new DocumentBuilder()
       .setTitle("E-commerce API")
@@ -60,7 +55,6 @@ async function bootstrap() {
       .build()
     const document = SwaggerModule.createDocument(app, config)
     SwaggerModule.setup("api", app, document)
-
     console.log("MongoDB URI:", process.env.MONGODB_URI)
     console.log("Google Client ID configured:", !!process.env.GOOGLE_CLIENT_ID)
     console.log("Frontend URL configured as:", frontendUrl)
@@ -72,11 +66,9 @@ async function bootstrap() {
     console.error("Failed to start application:", error)
   }
 }
-
 // Only run bootstrap in server environment
 if (typeof window === "undefined") {
   bootstrap()
 }
-
 // Export bootstrap for Next.js
 export { bootstrap }

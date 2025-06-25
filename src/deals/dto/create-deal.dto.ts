@@ -99,6 +99,8 @@ export class BuyerFitDto {
   })
   @IsArray()
   @IsEnum(CapitalAvailability, { each: true })
+  @IsArray()
+  @IsEnum(CapitalAvailability, { each: true })
   @IsOptional()
   capitalAvailability?: CapitalAvailability[];
   

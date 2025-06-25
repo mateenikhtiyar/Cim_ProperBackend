@@ -4,7 +4,7 @@ import {
   IsOptional, IsNumber, ValidateNested, Min, Max 
 } from "class-validator"
 import { Type } from "class-transformer"
-import { DealStatus, DealType, DealVisibility } from "../schemas/deal.schema"
+import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
 import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto } from "./create-deal.dto"
 
 // Define the CapitalAvailability Enum
@@ -89,11 +89,11 @@ export class UpdateDealDto {
   @IsOptional()
   managementPreferences?: ManagementPreferencesDto
 
-  @ApiProperty({ description: "Buyer fit details", type: BuyerFitDto, required: false })
+  @ApiProperty({ description: "Buyer fit details", type: UpdateBuyerFitDto, required: false })
   @ValidateNested()
-  @Type(() => BuyerFitDto)
+  @Type(() => UpdateBuyerFitDto)
   @IsOptional()
-  buyerFit?: BuyerFitDto
+  buyerFit?: UpdateBuyerFitDto
 
   @ApiProperty({ description: "Targeted buyer IDs", type: [String], required: false })
   @IsArray()
@@ -124,7 +124,12 @@ export class UpdateDealDto {
   @IsOptional()
   stakePercentage?: number
 
-  @ApiProperty({ description: "Documents uploaded for the deal", type: [String], required: false })
+  @ApiProperty({
+    description:
+      "Documents for the deal - if provided, replaces existing documents; if omitted, preserves existing documents",
+    type: [String],
+    required: false,
+  })
   @IsArray()
   @IsString({ each: true })
   @IsOptional()
