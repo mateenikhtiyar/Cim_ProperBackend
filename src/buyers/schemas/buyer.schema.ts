@@ -30,6 +30,10 @@ export class Buyer {
   @Prop({ type: String, required: false, default: null })
   phone: string
 
+  @ApiProperty({ description: "Phone number of the buyer", nullable: true })
+  @Prop({ type: String, required: false, default: null })
+  companyName: string
+
   @ApiProperty({ description: "Reference to the company profile", nullable: true })
   @Prop({ type: Types.ObjectId, ref: "CompanyProfile", default: null })
   companyProfileId: Types.ObjectId

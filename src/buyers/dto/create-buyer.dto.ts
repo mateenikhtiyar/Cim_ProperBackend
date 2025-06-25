@@ -1,5 +1,6 @@
 import { IsEmail, IsNotEmpty, IsOptional, MinLength, IsString } from "class-validator"
 import { ApiProperty } from "@nestjs/swagger"
+import { Optional } from "@nestjs/common";
 
 export class CreateBuyerDto {
   @ApiProperty({ example: "John Doe", description: "Full name of the buyer" })
@@ -20,7 +21,7 @@ export class CreateBuyerDto {
   @MinLength(6)
   password: string
 
-  // @ApiProperty({ example: "Acme Inc", description: "Company name of the buyer" })
-  // @IsNotEmpty()
-  // companyName: string
+  @ApiProperty({ example: "Acme Inc", description: "Company name of the buyer" })
+  @IsOptional()
+  companyName: string
 }
