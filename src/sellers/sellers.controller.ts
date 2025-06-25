@@ -142,24 +142,24 @@ export class SellersController {
   async getSellerPublic(@Param('id') id: string) {
     try {
       const seller = await this.sellersService.findById(id);
-
       // Remove sensitive information before returning
       const publicSellerInfo = {
         id: (seller as any)._id || (seller as any).id,
         fullName: seller.fullName,
         companyName: seller.companyName,
         profilePicture: seller.profilePicture,
+        email: seller.email,
+        phoneNumber: seller.phoneNumber,
         role: seller.role,
         // Don't include: email, password, googleId, isGoogleAccount, or any other sensitive data
       };
-
       return publicSellerInfo;
     } catch (error) {
       this.logger.error(`Error finding seller publicly: ${error.message}`, error.stack);
       throw error;
     }
   }
-  
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get('profile')
