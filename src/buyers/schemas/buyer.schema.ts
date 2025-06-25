@@ -25,6 +25,9 @@ export class Buyer {
   @Prop({ default: "buyer" })
   role: string
 
+  @ApiProperty({ description: "Full name of the company" })
+  @Prop({ required: true })
+  companyName: string
 
   @ApiProperty({ description: "Phone number of the buyer", nullable: true })
   @Prop({ type: String, required: false, default: null })
@@ -53,6 +56,8 @@ export class Buyer {
   @ApiProperty({ description: "Token expiry timestamp", nullable: true })
   @Prop({ default: null })
   resetPasswordExpires: Date
+
+
 
   // Ensure Mongoose methods are properly typed
   toObject?(): any

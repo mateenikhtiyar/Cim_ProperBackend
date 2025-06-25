@@ -1,3 +1,5 @@
+//sellers.controllers.ts
+
 // import {
 //   Controller,
 //   Get,
@@ -143,11 +145,35 @@ export class SellersController {
   @ApiOperation({ summary: 'Get seller profile' })
   @ApiResponse({ status: 200, description: 'Seller profile returned' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getProfile(@Request() req: any) {
+  async getProfile(@Query('sellerId') sellerId: string) {
     try {
-      return await this.sellersService.findById(req.user?.userId || req.user?.sub);
+      return await this.sellersService.findById(sellerId);
     } catch (error) {
       this.logger.error(`Error getting profile: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get("public/:id")
+  @ApiOperation({ summary: "Get a seller by ID (public endpoint - no authentication required)" })
+  @ApiParam({ name: "id", type: String, description: "Seller ID" })
+  @ApiResponse({ status: 200, description: "Return the seller (without sensitive information)" })
+  @ApiResponse({ status: 404, description: "Seller not found" })
+  async getSellerPublic(@Param('id') id: string) {
+    try {
+      const seller = await this.sellersService.findById(id);
+      // Remove sensitive information before returning
+      const publicSellerInfo = {
+        id: (seller as any)._id || (seller as any).id,
+        fullName: seller.fullName,
+        companyName: seller.companyName,
+        profilePicture: seller.profilePicture,
+        role: seller.role,
+        // Don't include: email, password, googleId, isGoogleAccount, or any other sensitive data
+      };
+      return publicSellerInfo;
+    } catch (error) {
+      this.logger.error(`Error finding seller publicly: ${error.message}`, error.stack);
       throw error;
     }
   }

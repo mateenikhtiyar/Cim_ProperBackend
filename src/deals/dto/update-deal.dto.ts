@@ -7,11 +7,7 @@ import { Type } from "class-transformer"
 import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
 import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto } from "./create-deal.dto"
 
-// Define the CapitalAvailability Enum
-export enum CapitalAvailability {
-  READY = "Ready to deploy immediately",
-  NEED_RAISE = "Need to raise",
-}
+
 
 export class UpdateDealDto {
   @ApiProperty({ description: "Title of the deal", example: "SaaS Company Acquisition Opportunity", required: false })
@@ -89,11 +85,11 @@ export class UpdateDealDto {
   @IsOptional()
   managementPreferences?: ManagementPreferencesDto
 
-  @ApiProperty({ description: "Buyer fit details", type: UpdateBuyerFitDto, required: false })
+  @ApiProperty({ description: "Buyer fit details", type: BuyerFitDto, required: false })
   @ValidateNested()
-  @Type(() => UpdateBuyerFitDto)
+  @Type(() => BuyerFitDto)
   @IsOptional()
-  buyerFit?: UpdateBuyerFitDto
+  buyerFit?: BuyerFitDto
 
   @ApiProperty({ description: "Targeted buyer IDs", type: [String], required: false })
   @IsArray()

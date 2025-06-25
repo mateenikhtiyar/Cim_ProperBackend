@@ -10,6 +10,10 @@ export class CreateBuyerDto {
   @IsEmail()
   email: string
 
+  @ApiProperty({ example: "Starbucks", description: "Full name of the company" })
+  @IsNotEmpty()
+  companyName: string
+
   @IsOptional()
   @IsString()
   phone?: string;

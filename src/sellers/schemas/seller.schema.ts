@@ -33,10 +33,6 @@ export class Seller {
   @Prop({ required: false })
   title!: string;
 
-  @ApiProperty({ description: "Website of the seller" })
-  @Prop({ required: false })
-  website!: string;
-
   @ApiProperty({ description: "Email address of the seller" })
   @Prop({ required: true, unique: true })
   email!: string;
@@ -48,10 +44,6 @@ export class Seller {
   @ApiProperty({ description: "Hashed password of the seller" })
   @Prop({ required: true })
   password!: string;
-
-  @ApiProperty({ description: "Hashed password of the seller" })
-  @Prop({ required: false })
-  title?: string;
 
   @ApiProperty({ description: "Company name of the seller" })
   @Prop({ required: true })
