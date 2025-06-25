@@ -95,15 +95,10 @@ class BusinessModel {
 
 @Schema()
 class ManagementPreferences {
-  @ApiProperty({ description: "Retiring/Divesting" })
-  @Prop({ default: false })
-  retiringDivesting?: boolean
-
-  @ApiProperty({ description: "Other Key Staff Will Stay" })
-  @Prop({ default: false })
-  staffStay?: boolean
+  @ApiProperty({ description: "Management preferences description" })
+  @Prop({ required: true })
+  managementPreferences!: string
 }
-
 @Schema()
 class BuyerFit {
   @ApiProperty({ description: "Capital Availability options", enum: CapitalAvailability, isArray: true })

@@ -78,17 +78,19 @@ export class BusinessModelDto {
 }
 
 export class ManagementPreferencesDto {
+  @ApiProperty({ description: "Description of why client is selling and continuation plan", required: false })
+  @IsString()
+  @IsOptional()
+  description?: string
   @ApiProperty({ description: "Retiring/Divesting", required: false })
   @IsBoolean()
   @IsOptional()
   retiringDivesting?: boolean
-
   @ApiProperty({ description: "Other Key Staff Will Stay", required: false })
   @IsBoolean()
   @IsOptional()
   staffStay?: boolean
 }
-
 export class BuyerFitDto {
   @ApiProperty({
     description: "Capital Availability options",
