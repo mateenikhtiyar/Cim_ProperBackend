@@ -1,5 +1,3 @@
-//sellers.controllers.ts
-
 // import {
 //   Controller,
 //   Get,
@@ -37,7 +35,6 @@ import {
   BadRequestException,
   UseInterceptors,
   UploadedFile,
-  NotFoundException,
 } from "@nestjs/common"
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -137,17 +134,42 @@ export class SellersController {
       )
     }
   }
+  @Get("public/:id")
+  @ApiOperation({ summary: "Get a seller by ID (public endpoint - no authentication required)" })
+  @ApiParam({ name: "id", type: String, description: "Seller ID" })
+  @ApiResponse({ status: 200, description: "Return the seller (without sensitive information)" })
+  @ApiResponse({ status: 404, description: "Seller not found" })
+  async getSellerPublic(@Param('id') id: string) {
+    try {
+      const seller = await this.sellersService.findById(id);
 
-  @UseGuards(JwtAuthGuard)
-  @Roles('seller', 'buyer')
+      // Remove sensitive information before returning
+      const publicSellerInfo = {
+        id: (seller as any)._id || (seller as any).id,
+        fullName: seller.fullName,
+        companyName: seller.companyName,
+        profilePicture: seller.profilePicture,
+        role: seller.role,
+        // Don't include: email, password, googleId, isGoogleAccount, or any other sensitive data
+      };
+
+      return publicSellerInfo;
+    } catch (error) {
+      this.logger.error(`Error finding seller publicly: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+  
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
   @Get('profile')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get seller profile' })
   @ApiResponse({ status: 200, description: 'Seller profile returned' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getProfile(@Query('sellerId') sellerId: string) {
+  async getProfile(@Request() req: any) {
     try {
-      return await this.sellersService.findById(sellerId);
+      return await this.sellersService.findById(req.user?.userId || req.user?.sub);
     } catch (error) {
       this.logger.error(`Error getting profile: ${error.message}`, error.stack);
       throw error;
@@ -602,33 +624,5 @@ export class SellersController {
       this.logger.error(`Error closing deal: ${error.message}`, error.stack)
       throw error
     }
-  }
-
-  /**
-   * Public endpoint to get a seller's public profile by sellerId (for buyers to see seller info on deals)
-   */
-  @Get('profile')
-  @ApiOperation({ summary: "Get a seller's public profile by sellerId (public)" })
-  @ApiQuery({ name: 'sellerId', required: true, type: String, description: 'Seller ID' })
-  @ApiResponse({ status: 200, description: 'Seller public profile returned' })
-  @ApiResponse({ status: 404, description: 'Seller not found' })
-  async getSellerPublicProfile(@Query('sellerId') sellerId: string) {
-    if (!sellerId) {
-      throw new BadRequestException('sellerId is required');
-    }
-    const seller = await this.sellersService.findById(sellerId);
-    if (!seller) {
-      throw new NotFoundException('Seller not found');
-    }
-    // Return only public fields
-    return {
-      fullName: seller.fullName,
-      email: seller.email,
-      phoneNumber: seller.phoneNumber,
-      profilePicture: seller.profilePicture,
-      companyName: seller.companyName,
-      title: seller.title,
-      website: seller.website,
-    };
   }
 }
