@@ -22,15 +22,10 @@ export class PreferencesDto {
   @IsOptional()
   stopSendingDeals?: boolean
 
-  @ApiProperty({ example: false, description: "Don't show my deals" })
+  @ApiProperty({ example: false, description: "Do not send deals that are currently marketed on other deal marketplaces" })
   @IsBoolean()
   @IsOptional()
-  dontShowMyDeals?: boolean
-
-  @ApiProperty({ example: false, description: "Don't send deals to my competitors" })
-  @IsBoolean()
-  @IsOptional()
-  dontSendDealsToMyCompetitors?: boolean
+  doNotSendMarketedDeals?: boolean
 
   @ApiProperty({ example: true, description: "Allow buyer like deals" })
   @IsBoolean()
@@ -153,9 +148,10 @@ export class CreateCompanyProfileDto {
   @Type(() => ContactDto)
   contacts: ContactDto[]
 
-  @ApiProperty({ example: "Private Equity", description: "Company type" })
-  @IsString()
-  companyType: string
+  @ApiProperty({ example: ["Private Equity"], description: "Company type", type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  companyType: string[]
 
   @ApiProperty({ example: "Fund", description: "Capital entity" })
   @IsString()
@@ -188,4 +184,10 @@ export class CreateCompanyProfileDto {
   @Type(() => AgreementsDto)
   @IsOptional()
   agreements?: AgreementsDto
+
+  @ApiProperty({ example: ["ready", "need-raise"], description: "Capital availability", type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  capitalAvailability?: string[]
 }

@@ -193,6 +193,10 @@ companyType?: string[];
   @Prop({ required: false, enum: DealVisibility })
   visibility?: DealVisibility
 
+  @ApiProperty({ description: "Deal reward level", enum: ["Seed", "Bloom", "Fruit"] })
+  @Prop({ required: true, enum: ["Seed", "Bloom", "Fruit"] })
+  rewardLevel!: "Seed" | "Bloom" | "Fruit";
+
   @ApiProperty({ description: "Industry sector of the company" })
   @Prop({ required: true })
   industrySector!: string
@@ -293,6 +297,10 @@ companyType?: string[];
   @ApiProperty({ description: "Deal expiration date" })
   @Prop({ required: false })
   expiresAt?: Date
+
+  @ApiProperty({ description: "Deals completed in the last 5 years", example: 5 })
+  @Prop({ required: false })
+  dealsCompletedLast5Years?: number;
 }
 
 export const DealSchema = SchemaFactory.createForClass(Deal)

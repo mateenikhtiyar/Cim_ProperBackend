@@ -145,13 +145,12 @@ export class SellersController {
   @ApiOperation({ summary: 'Get seller profile' })
   @ApiResponse({ status: 200, description: 'Seller profile returned' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getProfile(@Query('sellerId') sellerId: string) {
-    try {
-      return await this.sellersService.findById(sellerId);
-    } catch (error) {
-      this.logger.error(`Error getting profile: ${error.message}`, error.stack);
-      throw error;
+  async getProfile(@Request() req) {
+    const sellerId = req.user?.userId || req.user?.sub;
+    if (!sellerId) {
+      throw new UnauthorizedException("User not authenticated");
     }
+    return await this.sellersService.findById(sellerId);
   }
 
   @Get("public/:id")
@@ -168,6 +167,8 @@ export class SellersController {
         fullName: seller.fullName,
         companyName: seller.companyName,
         profilePicture: seller.profilePicture,
+        email: seller.email,
+        phoneNumber: seller.phoneNumber,
         role: seller.role,
         // Don't include: email, password, googleId, isGoogleAccount, or any other sensitive data
       };

@@ -21,10 +21,11 @@ export class UpdateCompanyProfileDto {
   @IsOptional()
   contacts?: ContactDto[]
 
-  @ApiProperty({ example: "Private Equity", description: "Company type" })
-  @IsString()
+  @ApiProperty({ example: ["Private Equity"], description: "Company type", type: [String] })
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
-  companyType?: string
+  companyType?: string[]
 
   @ApiProperty({ example: "Fund", description: "Capital entity" })
   @IsString()
@@ -62,8 +63,9 @@ export class UpdateCompanyProfileDto {
   @IsOptional()
   selectedCurrency?: string
 
-  @ApiProperty({ example: "ready_to_deploy", description: "Capital availability" })
-  @IsString()
+  @ApiProperty({ example: ["ready", "need-raise"], description: "Capital availability", type: [String] })
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
-  capitalAvailability?: string
+  capitalAvailability?: string[]
 }

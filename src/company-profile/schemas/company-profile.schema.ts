@@ -27,13 +27,9 @@ class Preferences {
   @Prop({ default: false })
   stopSendingDeals: boolean
 
-  @ApiProperty({ description: "Don't show my deals", default: false })
+  @ApiProperty({ description: "Do not send deals that are currently marketed on other deal marketplaces", default: false })
   @Prop({ default: false })
-  dontShowMyDeals: boolean
-
-  @ApiProperty({ description: "Don't send deals to my competitors", default: false })
-  @Prop({ default: false })
-  dontSendDealsToMyCompetitors: boolean
+  doNotSendMarketedDeals: boolean
 
   @ApiProperty({ description: "Allow buyer like deals", default: true })
   @Prop({ default: true })
@@ -97,6 +93,10 @@ class TargetCriteria {
   @ApiProperty({ description: "Additional description", nullable: true })
   @Prop({ required: false })
   description: string
+
+  @ApiProperty({ description: "Capital availability", type: [String], example: ["ready", "need-raise"] })
+  @Prop({ type: [String], default: [] })
+  capitalAvailability: string[]
 }
 
 @Schema()
@@ -132,9 +132,9 @@ export class CompanyProfile {
   @Prop({ type: [Object], default: [] })
   contacts: Contact[]
 
-  @ApiProperty({ description: "Company type" })
-  @Prop({ required: true })
-  companyType: string
+  @ApiProperty({ description: "Company type", type: [String] })
+  @Prop({ type: [String], required: true, default: [] })
+  companyType: string[]
 
   @ApiProperty({ description: "Capital entity" })
   @Prop({ required: true })
