@@ -13,7 +13,7 @@ export class SellerGoogleStrategy extends PassportStrategy(Strategy, "seller-goo
         super({
             clientID: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-            callbackURL: configService.get<string>("SELLER_GOOGLE_CALLBACK_URL") || "https://buyer.cimamplify.com/sellers/google/callback",
+            callbackURL: configService.get<string>("SELLER_GOOGLE_CALLBACK_URL") || "http://localhost:3001/sellers/google/callback",
             scope: ["email", "profile"]
         } as StrategyOptions);
     }

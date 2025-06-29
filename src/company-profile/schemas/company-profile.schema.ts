@@ -27,13 +27,9 @@ class Preferences {
   @Prop({ default: false })
   stopSendingDeals: boolean
 
-  @ApiProperty({ description: "Don't show my deals", default: false })
+  @ApiProperty({ description: "Do not send deals that are currently marketed on other deal marketplaces", default: false })
   @Prop({ default: false })
-  dontShowMyDeals: boolean
-
-  @ApiProperty({ description: "Don't send deals to my competitors", default: false })
-  @Prop({ default: false })
-  dontSendDealsToMyCompetitors: boolean
+  doNotSendMarketedDeals: boolean
 
   @ApiProperty({ description: "Allow buyer like deals", default: true })
   @Prop({ default: true })

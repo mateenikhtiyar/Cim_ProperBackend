@@ -22,15 +22,10 @@ export class PreferencesDto {
   @IsOptional()
   stopSendingDeals?: boolean
 
-  @ApiProperty({ example: false, description: "Don't show my deals" })
+  @ApiProperty({ example: false, description: "Do not send deals that are currently marketed on other deal marketplaces" })
   @IsBoolean()
   @IsOptional()
-  dontShowMyDeals?: boolean
-
-  @ApiProperty({ example: false, description: "Don't send deals to my competitors" })
-  @IsBoolean()
-  @IsOptional()
-  dontSendDealsToMyCompetitors?: boolean
+  doNotSendMarketedDeals?: boolean
 
   @ApiProperty({ example: true, description: "Allow buyer like deals" })
   @IsBoolean()
