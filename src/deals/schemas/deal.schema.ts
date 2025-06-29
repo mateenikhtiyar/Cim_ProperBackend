@@ -95,24 +95,30 @@ class BusinessModel {
 
 @Schema()
 class ManagementPreferences {
-  @ApiProperty({ description: "Management preferences description" })
-  @Prop({ required: true })
-  managementPreferences!: string
+  @ApiProperty({ description: "Retiring/Divesting" })
+  @Prop({ default: false })
+  retiringDivesting?: boolean
+
+  @ApiProperty({ description: "Other Key Staff Will Stay" })
+  @Prop({ default: false })
+  staffStay?: boolean
 }
+
 @Schema()
 class BuyerFit {
-  @ApiProperty({ description: "Capital Availability options", enum: CapitalAvailability, isArray: true })
-  @Prop({ type: [String], enum: CapitalAvailability, default: [] })
+  @ApiProperty({ description: "Capital Availability", isArray: true, enum: CapitalAvailability })
+  @Prop({ type: [String], enum: CapitalAvailability })
   capitalAvailability?: CapitalAvailability[]
 
   @ApiProperty({ description: "Minimum number of prior acquisitions" })
   @Prop({ required: false })
-  minPriorAcquisitions?: number
+  minPriorAcquisitions?: number;
 
   @ApiProperty({ description: "Minimum transaction size ($)" })
   @Prop({ required: false })
-  minTransactionSize?: number
+  minTransactionSize?: number;
 }
+
 
 @Schema()
 class DealTimeline {
@@ -171,8 +177,9 @@ export class Deal {
   companyDescription!: string
 
   @ApiProperty({ description: "Type of company", example: "SaaS Company" })
-  @Prop({ required: false })
-  companyType?: string
+  @Prop({ type: [String], required: false })
+companyType?: string[];
+
 
   @ApiProperty({ description: "Type of deal", enum: DealType })
   @Prop({ required: true, enum: DealType })
@@ -185,6 +192,10 @@ export class Deal {
   @ApiProperty({ description: "Deal visibility level", enum: DealVisibility })
   @Prop({ required: false, enum: DealVisibility })
   visibility?: DealVisibility
+
+  @ApiProperty({ description: "Deal reward level", enum: ["Seed", "Bloom", "Fruit"] })
+  @Prop({ required: true, enum: ["Seed", "Bloom", "Fruit"] })
+  rewardLevel!: "Seed" | "Bloom" | "Fruit";
 
   @ApiProperty({ description: "Industry sector of the company" })
   @Prop({ required: true })
@@ -286,6 +297,10 @@ export class Deal {
   @ApiProperty({ description: "Deal expiration date" })
   @Prop({ required: false })
   expiresAt?: Date
+
+  @ApiProperty({ description: "Deals completed in the last 5 years", example: 5 })
+  @Prop({ required: false })
+  dealsCompletedLast5Years?: number;
 }
 
 export const DealSchema = SchemaFactory.createForClass(Deal)
