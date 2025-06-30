@@ -92,6 +92,15 @@ export class CompanyProfileController {
     return this.companyProfileService.findOne(id);
   }
 
+  @Get('public/:id')
+  @ApiOperation({ summary: 'Get a company profile by ID (public access)' })
+  @ApiParam({ name: 'id', type: String, description: 'Company profile ID' })
+  @ApiResponse({ status: 200, description: 'Return the company profile' })
+  @ApiResponse({ status: 404, description: 'Company profile not found' })
+  async findOnePublic(@Param('id') id: string) {
+    return this.companyProfileService.findOne(id);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Roles('buyer')
   @Patch(':id')
