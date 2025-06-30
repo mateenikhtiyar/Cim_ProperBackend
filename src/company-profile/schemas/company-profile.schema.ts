@@ -86,10 +86,6 @@ class TargetCriteria {
   @Prop({ type: [String], default: [] })
   preferredBusinessModels: string[]
 
-  @ApiProperty({ description: "Management team preference", type: [String] })
-  @Prop({ type: [String], default: [] })
-  managementTeamPreference: string[]
-
   @ApiProperty({ description: "Additional description", nullable: true })
   @Prop({ required: false })
   description: string

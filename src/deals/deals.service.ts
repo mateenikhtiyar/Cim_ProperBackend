@@ -134,7 +134,7 @@ export class DealsService {
 
     return deal.save()
   }
-async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promise<Deal> {
+  async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promise<Deal> {
     const deal = await this.dealModel.findById(id).exec();
     if (!deal) {
       throw new NotFoundException(`Deal with ID ${id} not found`);
@@ -156,7 +156,7 @@ async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promis
       deal.timeline.completedAt = new Date();
     }
     deal.timeline.updatedAt = new Date();
-    // ⭐ IMPORTANT: Only merge documents if they were provided
+    // :star: IMPORTANT: Only merge documents if they were provided
     if (Array.isArray(updateDealDto.documents) && updateDealDto.documents.length > 0) {
       // If the payload is an array of strings (filenames)
       if (typeof updateDealDto.documents[0] === "string") {
@@ -178,19 +178,20 @@ async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promis
     }
     // LOGGING: Log resulting deal.documents after update
     console.log("[UPDATE] Resulting deal.documents after update:", JSON.stringify(deal.documents));
-    // Assign other fields
-    Object.assign(
-      deal,
-      // Filter out `documents` so Object.assign doesn't accidentally erase
-      { ...updateDealDto, documents: undefined }
-    );
+    // Assign other fields - FIXED: Properly exclude documents property
+    const { documents, ...updateDataWithoutDocuments } = updateDealDto;
+    Object.assign(deal, updateDataWithoutDocuments);
     // Ensure rewardLevel is always in sync with visibility
     if (deal.visibility) {
-      const rewardLevelMap: Record<string, 'Seed' | 'Bloom' | 'Fruit'> = { seed: 'Seed', bloom: 'Bloom', fruit: 'Fruit' };
+      const rewardLevelMap: Record<string, 'Seed' | 'Bloom' | 'Fruit'> = {
+        seed: 'Seed',
+        bloom: 'Bloom',
+        fruit: 'Fruit'
+      };
       deal.rewardLevel = rewardLevelMap[deal.visibility] || 'Seed';
     }
     await deal.save();
-    // Return the updated deal (not matching buyers)
+    // Return the updated deal
     const updatedDeal = await this.dealModel.findById(deal._id).exec();
     if (!updatedDeal) {
       throw new NotFoundException(`Deal with ID ${deal._id} not found after update`);
@@ -272,7 +273,6 @@ async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promis
       ...extraMatchCondition,
     };
 
-    // ... leave the rest of the existing code as-is
     const companyProfileModel = this.dealModel.db.model('CompanyProfile');
     const matchingProfiles = await companyProfileModel
       .aggregate([
@@ -549,6 +549,10 @@ async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promis
             buyerEmail: "$buyerInfo.email",
             targetCriteria: 1,
             preferences: 1,
+            companyType: 1,
+            capitalEntity: 1,
+            dealsCompletedLast5Years: 1,
+            averageDealSize: 1,
             totalMatchScore: 1,
             matchPercentage: { $round: ["$matchPercentage", 0] },
             matchDetails: {

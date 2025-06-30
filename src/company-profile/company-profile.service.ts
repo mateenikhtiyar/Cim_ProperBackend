@@ -29,7 +29,6 @@ export class CompanyProfileService {
     if (!targetCriteria.countries) targetCriteria.countries = []
     if (!targetCriteria.industrySectors) targetCriteria.industrySectors = []
     if (!targetCriteria.preferredBusinessModels) targetCriteria.preferredBusinessModels = []
-    if (!targetCriteria.managementTeamPreference) targetCriteria.managementTeamPreference = []
   
     // Create new profile
     const newCompanyProfile = new this.companyProfileModel({
