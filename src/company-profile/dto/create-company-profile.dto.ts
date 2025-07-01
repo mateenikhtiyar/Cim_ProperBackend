@@ -22,15 +22,10 @@ export class PreferencesDto {
   @IsOptional()
   stopSendingDeals?: boolean
 
-  @ApiProperty({ example: false, description: "Don't show my deals" })
+  @ApiProperty({ example: false, description: "Do not send deals that are currently marketed on other deal marketplaces" })
   @IsBoolean()
   @IsOptional()
-  dontShowMyDeals?: boolean
-
-  @ApiProperty({ example: false, description: "Don't send deals to my competitors" })
-  @IsBoolean()
-  @IsOptional()
-  dontSendDealsToMyCompetitors?: boolean
+  doNotSendMarketedDeals?: boolean
 
   @ApiProperty({ example: true, description: "Allow buyer like deals" })
   @IsBoolean()
@@ -101,12 +96,6 @@ export class TargetCriteriaDto {
   @IsString({ each: true })
   @IsOptional()
   preferredBusinessModels?: string[]
-
-  @ApiProperty({ example: ["Owner(s) Departing", "Willing to Stay"], description: "Management team preference" })
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  managementTeamPreference?: string[]
 
   @ApiProperty({
     example: "Looking for established businesses with stable cash flow",
