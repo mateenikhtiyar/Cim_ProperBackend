@@ -29,7 +29,6 @@ export class CompanyProfileService {
     if (!targetCriteria.countries) targetCriteria.countries = []
     if (!targetCriteria.industrySectors) targetCriteria.industrySectors = []
     if (!targetCriteria.preferredBusinessModels) targetCriteria.preferredBusinessModels = []
-    if (!targetCriteria.managementTeamPreference) targetCriteria.managementTeamPreference = []
   
     // Create new profile
     const newCompanyProfile = new this.companyProfileModel({
@@ -123,12 +122,11 @@ export class CompanyProfileService {
     return companyProfile.save()
   }
 
-  async updatePreferences(
+ async updatePreferences(
     buyerId: string,
     preferences: {
       stopSendingDeals?: boolean
-      dontShowMyDeals?: boolean
-      dontSendDealsToMyCompetitors?: boolean
+      doNotSendMarketedDeals?: boolean
       allowBuyerLikeDeals?: boolean
     },
   ): Promise<CompanyProfile> {
@@ -141,11 +139,8 @@ export class CompanyProfileService {
     if (preferences.stopSendingDeals !== undefined) {
       companyProfile.preferences.stopSendingDeals = preferences.stopSendingDeals
     }
-    if (preferences.dontShowMyDeals !== undefined) {
-      companyProfile.preferences.dontShowMyDeals = preferences.dontShowMyDeals
-    }
-    if (preferences.dontSendDealsToMyCompetitors !== undefined) {
-      companyProfile.preferences.dontSendDealsToMyCompetitors = preferences.dontSendDealsToMyCompetitors
+    if (preferences.doNotSendMarketedDeals !== undefined) {
+      companyProfile.preferences.doNotSendMarketedDeals = preferences.doNotSendMarketedDeals
     }
     if (preferences.allowBuyerLikeDeals !== undefined) {
       companyProfile.preferences.allowBuyerLikeDeals = preferences.allowBuyerLikeDeals
