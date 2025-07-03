@@ -66,6 +66,6 @@ export class RegisterSellerDto {
 
   @ApiProperty({ example: "Retiring to divesting", description: "Management future preferences" })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   managementPreferences: string;
 }
