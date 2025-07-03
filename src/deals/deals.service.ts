@@ -6,6 +6,9 @@ import * as fs from "fs"
 import { Model } from "mongoose"
 import { InjectModel } from "@nestjs/mongoose"
 import { expandCountryOrRegion } from '../common/geography-hierarchy';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsOptional } from 'class-validator';
+
 interface DocumentInfo {
   filename: string
   originalName: string
@@ -484,7 +487,7 @@ export class DealsService {
               $cond: [
                 {
                   $and: [
-                    { $eq: [{ $ifNull: [deal.managementPreferences?.retiringDivesting, false] }, true] },
+                    // { $eq: [{ $ifNull: [deal.managementPreferences?.retiringDivesting, false] }, true] },
                     { $in: ["Owner(s) Departing", { $ifNull: ["$targetCriteria.managementTeamPreference", []] }] },
                   ],
                 },

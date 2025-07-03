@@ -95,11 +95,10 @@ export class UpdateDealDto {
   @IsOptional()
   businessModel?: BusinessModelDto
 
-  @ApiProperty({ description: "Management preferences", type: ManagementPreferencesDto, required: false })
-  @ValidateNested()
-  @Type(() => ManagementPreferencesDto)
+  @ApiProperty({ description: "Management preferences (free text)" })
+  @IsString()
   @IsOptional()
-  managementPreferences?: ManagementPreferencesDto
+  managementPreferences?: string
 
   @ApiProperty({ description: "Buyer fit details", type: UpdateBuyerFitDto, required: false })
   @ValidateNested()
