@@ -60,4 +60,8 @@ export class UpdateSellerDto {
   @IsUrl({}, { message: "Website must be a valid URL" })
   website?: string;
 
+  @ApiPropertyOptional({ example: "Retiring to divesting", description: "Management future preferences" })
+  @IsOptional()
+  @IsString()
+  managementPreferences?: string;
 }

@@ -225,9 +225,9 @@ companyType?: string[];
   @Prop({ type: Object, default: {} })
   businessModel!: BusinessModel
 
-  @ApiProperty({ description: "Management preferences details" })
-  @Prop({ type: Object, default: {} })
-  managementPreferences!: ManagementPreferences
+  @ApiProperty({ description: "Management preferences (free text)" })
+  @Prop({ type: String, default: "" })
+  managementPreferences!: string
 
   @ApiProperty({ description: "Buyer fit details" })
   @Prop({ type: Object, default: {} })
