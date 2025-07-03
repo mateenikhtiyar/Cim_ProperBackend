@@ -48,4 +48,24 @@ export class RegisterSellerDto {
   @IsString()
   @IsNotEmpty()
   companyName: string;
+
+  @ApiProperty({ example: "CEO", description: "Title of the seller" })
+  @IsString()
+  @IsNotEmpty()
+  title: string;
+
+  @ApiProperty({ example: "+1234567890", description: "Phone number of the seller" })
+  @IsString()
+  @IsNotEmpty()
+  phoneNumber: string;
+
+  @ApiProperty({ example: "https://example.com", description: "Website of the seller/company" })
+  @IsString()
+  @IsNotEmpty()
+  website: string;
+
+  @ApiProperty({ example: "Retiring to divesting", description: "Management future preferences" })
+  @IsString()
+  @IsNotEmpty()
+  managementPreferences: string;
 }
