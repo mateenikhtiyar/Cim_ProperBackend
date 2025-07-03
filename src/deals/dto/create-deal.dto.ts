@@ -198,11 +198,10 @@ export class CreateDealDto {
   @IsOptional()
   businessModel?: BusinessModelDto
 
-  @ApiProperty({ description: "Management preferences details", type: ManagementPreferencesDto, required: false })
-  @ValidateNested()
-  @Type(() => ManagementPreferencesDto)
+  @ApiProperty({ description: "Management preferences (free text)" })
+  @IsString()
   @IsOptional()
-  managementPreferences?: ManagementPreferencesDto
+  managementPreferences?: string;
 
   @ApiProperty({ description: "Buyer fit details", type: BuyerFitDto, required: false })
   @ValidateNested()

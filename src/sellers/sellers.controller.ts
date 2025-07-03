@@ -149,6 +149,7 @@ export class SellersController {
         companyName: seller.companyName,
         profilePicture: seller.profilePicture,
         email: seller.email,
+        phone: seller.phoneNumber,
         phoneNumber: seller.phoneNumber,
         role: seller.role,
         // Don't include: email, password, googleId, isGoogleAccount, or any other sensitive data
@@ -554,6 +555,8 @@ export class SellersController {
           id: (seller as any)._id || (seller as any).id,
           fullName: seller.fullName,
           email: seller.email,
+          phoneNumber: seller.phoneNumber,
+          role: seller.role,
           profilePicture: seller.profilePicture
         }
       };

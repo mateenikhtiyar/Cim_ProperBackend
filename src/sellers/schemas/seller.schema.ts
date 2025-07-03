@@ -34,16 +34,16 @@ export class Seller {
   email!: string;
 
   @ApiProperty({ description: "Company website" })
-  @Prop({ required: false })
+  @Prop({ required: true })
   website: string
 
   @ApiProperty({ description: "Hashed password of the seller" })
   @Prop({ required: true })
   password!: string;
 
-  @ApiProperty({ description: "Hashed password of the seller" })
-  @Prop({ required: false })
-  title?: string;
+  @ApiProperty({ description: "Title of the seller" })
+  @Prop({ required: true })
+  title!: string;
 
   @ApiProperty({ description: "Company name of the seller" })
   @Prop({ required: true })
@@ -58,8 +58,8 @@ export class Seller {
   profilePicture!: string;
 
   @ApiProperty({ description: "Phone number of the seller" })
-  @Prop({ required: false })
-  phoneNumber?: string
+  @Prop({ required: true })
+  phoneNumber!: string;
 
   @ApiProperty({ description: "Whether the account was created using Google OAuth", default: false })
   @Prop({ default: false })
@@ -76,6 +76,10 @@ export class Seller {
   @ApiProperty({ description: "Token expiry timestamp", nullable: true })
   @Prop({ default: null })
   resetPasswordExpires: Date
+
+  @ApiProperty({ description: "Management future preferences" })
+  @Prop({ required: true })
+  managementPreferences!: string;
 
   // Add any additional fields needed
 
