@@ -78,7 +78,7 @@ export class Seller {
   resetPasswordExpires: Date
 
   @ApiProperty({ description: "Management future preferences" })
-  @Prop({ required: false })
+  @Prop({ required: false, default: "" })
   managementPreferences!: string;
 
   // Add any additional fields needed

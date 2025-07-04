@@ -31,11 +31,22 @@ export class CompanyProfileService {
     if (!targetCriteria.preferredBusinessModels) targetCriteria.preferredBusinessModels = []
   
     // Create new profile
+    const agreements = createCompanyProfileDto.agreements || {};
+    let agreementsAcceptedAt: Date | undefined = undefined;
+    if (
+      agreements.termsAndConditionsAccepted === true &&
+      agreements.ndaAccepted === true &&
+      agreements.feeAgreementAccepted === true
+    ) {
+      agreementsAcceptedAt = new Date();
+    }
+
     const newCompanyProfile = new this.companyProfileModel({
       ...createCompanyProfileDto,
       buyer: buyerId,
       targetCriteria,
       selectedCurrency: createCompanyProfileDto.selectedCurrency || "USD",
+      ...(agreementsAcceptedAt ? { agreementsAcceptedAt } : {}),
     })
   
     const savedProfile = await newCompanyProfile.save()
@@ -74,6 +85,11 @@ export class CompanyProfileService {
 
     if (companyProfile.buyer.toString() !== buyerId) {
       throw new ForbiddenException('You do not have permission to update this profile');
+    }
+
+    // Prevent agreementsAcceptedAt from being overwritten
+    if ('agreementsAcceptedAt' in updateCompanyProfileDto) {
+      delete (updateCompanyProfileDto as any).agreementsAcceptedAt;
     }
 
     // Update the profile
