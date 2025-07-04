@@ -68,4 +68,5 @@ export class RegisterSellerDto {
   @IsString()
   @IsOptional()
   managementPreferences?: string;
+
 }
