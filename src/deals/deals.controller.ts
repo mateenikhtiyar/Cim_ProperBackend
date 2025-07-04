@@ -331,18 +331,19 @@ export class DealsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
+  @Roles("seller", "admin") // ✅ Allow both seller and admin
   @Get("completed")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Get completed deals for the seller" })
+  @ApiOperation({ summary: "Get completed deals for seller or admin" })
   @ApiResponse({ status: 200, description: "Return completed deals", type: [DealResponseDto] })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller or admin role" })
   async getCompletedDeals(@Request() req: RequestWithUser) {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated");
     }
     return this.dealsService.getCompletedDeals(req.user.userId);
   }
+  
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
@@ -431,26 +432,51 @@ export class DealsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
+  @Roles("admin")
+  @Get("admin/completed/all")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get all completed deals (admin only)" })
+  @ApiResponse({ status: 200, description: "List of completed deals", type: [DealResponseDto] })
+  @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
+  async getAllCompletedDeals(@Request() req: RequestWithUser) {
+    if (!req.user?.userId || req.user.role !== "admin") {
+      throw new UnauthorizedException("Access denied: admin only.");
+    }
+  
+    return this.dealsService.getAllCompletedDeals();
+  }
+  
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller", "admin")
   @Get(":id/status-summary")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Get deal status summary with buyer breakdown (seller only)" })
+  @ApiOperation({ summary: "Get deal status summary with buyer breakdown (admin or seller)" })
   @ApiParam({ name: "id", description: "Deal ID" })
   @ApiResponse({ status: 200, description: "Return deal status summary" })
-  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
-  async getDealStatusSummary(@Param("id") dealId: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException("User not authenticated")
+  @ApiResponse({ status: 403, description: "Forbidden - requires role or ownership" })
+  async getDealStatusSummary(
+    @Param("id") dealId: string,
+    @Request() req: RequestWithUser
+  ) {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+  
+    if (!userId) {
+      throw new UnauthorizedException("User not authenticated");
     }
-
-    // Verify the seller owns this deal
-    const deal = await this.dealsService.findOne(dealId)
-    if (deal.seller.toString() !== req.user.userId) {
-      throw new ForbiddenException("You don't have permission to view this deal's status")
+  
+    const deal = await this.dealsService.findOne(dealId);
+  
+    // 🔐 If seller, enforce ownership
+    if (role === "seller" && deal.seller.toString() !== userId) {
+      throw new ForbiddenException("You don't have permission to view this deal's status");
     }
-
-    return this.dealsService.getDealWithBuyerStatusSummary(dealId)
+  
+    // ✅ Admin can access any deal
+    return this.dealsService.getDealWithBuyerStatusSummary(dealId);
   }
+  
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")

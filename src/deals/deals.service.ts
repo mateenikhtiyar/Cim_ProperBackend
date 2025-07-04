@@ -1954,6 +1954,11 @@ export class DealsService {
     }
   }
 
+  async getAllCompletedDeals(): Promise<Deal[]> {
+    return this.dealModel.find({ status: "completed" }).exec();
+  }
+  
+
   async getBuyerEngagementDashboard(sellerId: string): Promise<any> {
     try {
       const deals = await this.dealModel.find({ seller: sellerId }).exec()
