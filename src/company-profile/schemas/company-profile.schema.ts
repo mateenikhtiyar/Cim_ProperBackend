@@ -156,6 +156,10 @@ export class CompanyProfile {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: "Buyer", required: true })
   buyer: string
 
+  @ApiProperty({ description: "Date when all agreements were first accepted", required: false })
+  @Prop({ type: Date })
+  agreementsAcceptedAt?: Date;
+
   // Ensure Mongoose methods are properly typed
   toObject?(): any
 }
