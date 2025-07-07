@@ -9,7 +9,7 @@ import * as fs from "fs"
 async function bootstrap() {
   try {
     const app = await NestFactory.create<NestExpressApplication>(AppModule);
-    let frontendUrl = process.env.FRONTEND_URL || "https://buyer.cimamplify.com"
+    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
@@ -36,7 +36,7 @@ async function bootstrap() {
     });
     // Fix CORS configuration
     app.enableCors({
-      origin: ["https://buyer.cimamplify.com"],
+      origin: ["http://localhost:3000"],
       credentials: true,
     })
     // Setup Swagger

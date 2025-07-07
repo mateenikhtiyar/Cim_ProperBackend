@@ -348,7 +348,7 @@ export class SellersController {
         throw new ForbiddenException("You don't have permission to view interactions for this deal")
       }
 
-      return await this.dealsService.getBuyerInteractions(dealId)
+      return await this.dealsService.getBuyerInteractionsForDeal(dealId)
     } catch (error) {
       this.logger.error(`Error getting deal buyer interactions: ${error.message}`, error.stack)
       throw error
@@ -378,12 +378,13 @@ export class SellersController {
         throw new ForbiddenException("You don't have permission to view this deal's status")
       }
 
-      return await this.dealsService.getDealWithBuyerStatus(dealId)
+      return await this.dealsService.getDealWithBuyerStatusSummary(dealId)
     } catch (error) {
       this.logger.error(`Error getting deal status summary: ${error.message}`, error.stack)
       throw error
     }
   }
+
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
