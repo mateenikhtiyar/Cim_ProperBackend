@@ -14,6 +14,9 @@ import {
   UploadedFiles,
   ValidationPipe,
   BadRequestException,
+  HttpException,
+  HttpStatus,
+  Res,
 } from "@nestjs/common"
 import { FilesInterceptor } from "@nestjs/platform-express"
 import { diskStorage } from "multer"
@@ -27,6 +30,7 @@ import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
 import { DealResponseDto } from "./dto/deal-response.dto"
 import { Express } from "express"
+import { Response } from 'express'
 
 interface RequestWithUser extends Request {
   user: {
@@ -267,6 +271,17 @@ export class DealsController {
     }
   }
 
+// Place static routes before dynamic routes
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+@Get('active-accepted')
+@ApiBearerAuth()
+@ApiOperation({ summary: 'Get all deals with at least one accepted invitation (admin only)' })
+@ApiResponse({ status: 200, description: 'List of deals with accepted invitations', type: [DealResponseDto] })
+async getAllActiveDealsWithAccepted() {
+  return this.dealsService.getAllActiveDealsWithAccepted();
+}
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
   @Delete(":id/documents/:documentIndex")
@@ -447,6 +462,10 @@ export class DealsController {
   }
   
 
+
+
+
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller", "admin")
   @Get(":id/status-summary")
@@ -477,6 +496,20 @@ export class DealsController {
     return this.dealsService.getDealWithBuyerStatusSummary(dealId);
   }
   
+  @Get(':dealId/document/:filename')
+  @UseGuards(JwtAuthGuard)
+  async downloadDocument(@Param('dealId') dealId: string, @Param('filename') filename: string, @Res() res: Response) {
+    try {
+      const fileStream = await this.dealsService.getDocumentFile(dealId, filename);
+      res.set({
+        'Content-Type': fileStream.mimetype,
+        'Content-Disposition': `attachment; filename="${fileStream.originalName}"`,
+      });
+      fileStream.stream.pipe(res);
+    } catch (error) {
+      throw new HttpException(error.message, HttpStatus.NOT_FOUND);
+    }
+  }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
