@@ -249,400 +249,370 @@ export class DealsService {
       .exec()
   }
 
-async findMatchingBuyers(dealId: string): Promise<any[]> {
-  const deal = await this.findOne(dealId);
+  async findMatchingBuyers(dealId: string): Promise<any[]> {
+    const deal = await this.findOne(dealId);
 
-  // Expand the deal.geographySelection into its continent/region/sub-regions
-  const expandedGeos = expandCountryOrRegion(deal.geographySelection);
+    // Expand the deal.geographySelection into its continent/region/sub-regions
+    const expandedGeos = expandCountryOrRegion(deal.geographySelection);
 
-  const { rewardLevel } = deal;
-  let extraMatchCondition: any = {};
+    const { rewardLevel } = deal;
+    let extraMatchCondition: any = {};
 
-  // Seed functionality - if deal is "Seed" and buyer has "doNotSendMarketedDeals" = true, exclude them
-  if (rewardLevel === "Seed") {
-    extraMatchCondition = {
-      "preferences.doNotSendMarketedDeals": { $ne: true }
+    // Seed functionality - if deal is "Seed" and buyer has "doNotSendMarketedDeals" = true, exclude them
+    if (rewardLevel === "Seed") {
+      extraMatchCondition = {
+        "preferences.doNotSendMarketedDeals": { $ne: true }
+      };
+    }
+
+    // MANDATORY matching criteria - these are required for any match
+    const mandatoryQuery: any = {
+      "preferences.stopSendingDeals": { $ne: true },
+      "targetCriteria.countries": { $in: expandedGeos },
+      "targetCriteria.industrySectors": { $in: [deal.industrySector] },
+      ...extraMatchCondition,
     };
-  }
 
-  // MANDATORY matching criteria - these are required for any match
-  const mandatoryQuery: any = {
-    "preferences.stopSendingDeals": { $ne: true },
-    "targetCriteria.countries": { $in: expandedGeos },
-    "targetCriteria.industrySectors": { $in: [deal.industrySector] },
-    ...extraMatchCondition,
-  };
-
-  const companyProfileModel = this.dealModel.db.model('CompanyProfile');
-  const matchingProfiles = await companyProfileModel
-    .aggregate([
-      { $match: mandatoryQuery },
-      {
-        $lookup: {
-          from: 'buyers',
-          localField: 'buyer',
-          foreignField: '_id',
-          as: 'buyerInfo',
+    const companyProfileModel = this.dealModel.db.model('CompanyProfile');
+    const matchingProfiles = await companyProfileModel
+      .aggregate([
+        { $match: mandatoryQuery },
+        {
+          $lookup: {
+            from: 'buyers',
+            localField: 'buyer',
+            foreignField: '_id',
+            as: 'buyerInfo',
+          },
         },
-      },
-      { $unwind: '$buyerInfo' },
-      {
-        $addFields: {
-          // MANDATORY MATCHES - Always get full points since they passed the mandatory query
-          industryMatch: 10, // Always 10 points since it's mandatory
-          geographyMatch: 10, // Always 10 points since it's mandatory
+        { $unwind: '$buyerInfo' },
+        {
+          $addFields: {
+            // MANDATORY MATCHES - Always get full points since they passed the mandatory query
+            industryMatch: 10, // Always 10 points since it's mandatory
+            geographyMatch: 10, // Always 10 points since it's mandatory
 
-          // REVENUE RANGE MATCHING - Deal revenue must be between buyer's min and max
-          revenueMatch: {
-            $cond: [
-              {
-                $and: [
-                  // Lower bound: deal revenue >= buyer min (or buyer has no min)
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
-                      { $gte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] }, { $ifNull: ["$targetCriteria.revenueMin", 0] }] }
-                    ]
-                  },
-                  // Upper bound: deal revenue <= buyer max (or buyer has no max)
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
-                      { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
-                    ]
-                  }
-                ]
-              },
-              8, // Match points
-              0
-            ]
-          },
+            // REVENUE RANGE MATCHING - Deal revenue must be between buyer's min and max
+            revenueMatch: {
+              $cond: [
+                {
+                  $and: [
+                    // Lower bound: deal revenue >= buyer min (or buyer has no min)
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
+                        { $gte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] }, { $ifNull: ["$targetCriteria.revenueMin", 0] }] }
+                      ]
+                    },
+                    // Upper bound: deal revenue <= buyer max (or buyer has no max)
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+                        { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
+                      ]
+                    }
+                  ]
+                },
+                8, // Match points
+                0
+              ]
+            },
 
-          // EBITDA RANGE MATCHING - Deal EBITDA must be between buyer's min and max
-          // If buyer puts 0 in min, they want anything above 0
-          ebitdaMatch: {
-            $cond: [
-              {
-                $and: [
-                  // Lower bound: if buyer min is 0, deal must be > 0; otherwise deal >= buyer min
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
-                      {
-                        $cond: [
-                          { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", 0] }, 0] },
-                          { $gt: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] }, 0] },
-                          { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] }, { $ifNull: ["$targetCriteria.ebitdaMin", 0] }] }
-                        ]
-                      }
-                    ]
-                  },
-                  // Upper bound: deal EBITDA <= buyer max (or buyer has no max)
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
-                      { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
-                    ]
-                  }
-                ]
-              },
-              8,
-              0
-            ]
-          },
+            // EBITDA RANGE MATCHING - Deal EBITDA must be between buyer's min and max
+            // If buyer puts 0 in min, they want anything above 0
+            ebitdaMatch: {
+              $cond: [
+                {
+                  $and: [
+                    // Lower bound: if buyer min is 0, deal must be > 0; otherwise deal >= buyer min
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
+                        {
+                          $cond: [
+                            { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", 0] }, 0] },
+                            { $gt: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] }, 0] },
+                            { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] }, { $ifNull: ["$targetCriteria.ebitdaMin", 0] }] }
+                          ]
+                        }
+                      ]
+                    },
+                    // Upper bound: deal EBITDA <= buyer max (or buyer has no max)
+                    {
+                      $or: [
+                        { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+                        { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
+                      ]
+                    }
+                  ]
+                },
+                8,
+                0
+              ]
+            },
 
-          // TRANSACTION SIZE RANGE MATCHING - Deal asking price must be between buyer's min and max
-          transactionSizeMatch: {
-            $cond: [
-              {
-                $and: [
-                  // Lower bound: deal asking price >= buyer min (or buyer has no min)
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMin", null] }, null] },
-                      { $gte: [{ $ifNull: [deal.financialDetails?.askingPrice, 0] }, { $ifNull: ["$targetCriteria.transactionSizeMin", 0] }] }
-                    ]
-                  },
-                  // Upper bound: deal asking price <= buyer max (or buyer has no max)
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMax", null] }, null] },
-                      { $lte: [{ $ifNull: [deal.financialDetails?.askingPrice, 0] }, { $ifNull: ["$targetCriteria.transactionSizeMax", Number.MAX_SAFE_INTEGER] }] }
-                    ]
-                  }
-                ]
-              },
-              8, // Points for transaction size match
-              0
-            ]
-          },
+            // AVERAGE REVENUE GROWTH MATCHING - Deal growth must be >= buyer's requirement
+            revenueGrowthMatch: {
+              $cond: [
+                {
+                  $or: [
+                    // No revenue growth criteria set by buyer
+                    { $eq: [{ $ifNull: ["$targetCriteria.revenueGrowth", null] }, null] },
+                    // Deal growth >= buyer's minimum requirement
+                    { $gte: [{ $ifNull: [deal.financialDetails?.avgRevenueGrowth, 0] }, { $ifNull: ["$targetCriteria.revenueGrowth", 0] }] }
+                  ]
+                },
+                5,
+                0
+              ]
+            },
 
-          // AVERAGE REVENUE GROWTH MATCHING - Deal growth must be >= buyer's requirement
-          revenueGrowthMatch: {
-            $cond: [
-              {
-                $or: [
-                  // No revenue growth criteria set by buyer
-                  { $eq: [{ $ifNull: ["$targetCriteria.revenueGrowth", null] }, null] },
-                  // Deal growth >= buyer's minimum requirement
-                  { $gte: [{ $ifNull: [deal.financialDetails?.avgRevenueGrowth, 0] }, { $ifNull: ["$targetCriteria.revenueGrowth", 0] }] }
-                ]
-              },
-              5,
-              0
-            ]
-          },
+            // YEARS IN BUSINESS MATCHING - Deal years >= buyer's minimum requirement
+            yearsMatch: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: [{ $ifNull: ["$targetCriteria.minYearsInBusiness", null] }, null] },
+                    { $gte: [deal.yearsInBusiness, { $ifNull: ["$targetCriteria.minYearsInBusiness", 0] }] }
+                  ]
+                },
+                5,
+                0
+              ]
+            },
 
-          // YEARS IN BUSINESS MATCHING - Deal years >= buyer's minimum requirement
-          yearsMatch: {
-            $cond: [
-              {
-                $or: [
-                  { $eq: [{ $ifNull: ["$targetCriteria.minYearsInBusiness", null] }, null] },
-                  { $gte: [deal.yearsInBusiness, { $ifNull: ["$targetCriteria.minYearsInBusiness", 0] }] }
-                ]
-              },
-              5,
-              0
-            ]
-          },
+            // PREFERRED BUSINESS MODELS MATCHING - Check if any deal business model matches buyer preferences
+            businessModelMatch: {
+              $sum: [
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.recurringRevenue, false] }, true] },
+                        { $in: ["Recurring Revenue", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+                      ]
+                    },
+                    3, // Bonus points for recurring revenue match
+                    0
+                  ]
+                },
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.projectBased, false] }, true] },
+                        { $in: ["Project-Based", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+                      ]
+                    },
+                    3, // Bonus points for project-based match
+                    0
+                  ]
+                },
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.assetLight, false] }, true] },
+                        { $in: ["Asset Light", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+                      ]
+                    },
+                    3, // Bonus points for asset light match
+                    0
+                  ]
+                },
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: [{ $ifNull: [deal.businessModel?.assetHeavy, false] }, true] },
+                        { $in: ["Asset Heavy", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+                      ]
+                    },
+                    3, // Bonus points for asset heavy match
+                    0
+                  ]
+                }
+              ]
+            },
 
-          // PREFERRED BUSINESS MODELS MATCHING - Exact match between deal and buyer preferences
-          businessModelMatch: {
-            $sum: [
-              {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: [{ $ifNull: [deal.businessModel?.recurringRevenue, false] }, true] },
-                      { $in: ["Recurring Revenue", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-                    ]
-                  },
-                  3, // Bonus points for recurring revenue match
-                  0
-                ]
-              },
-              {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: [{ $ifNull: [deal.businessModel?.projectBased, false] }, true] },
-                      { $in: ["Project-Based", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-                    ]
-                  },
-                  3, // Bonus points for project-based match
-                  0
-                ]
-              },
-              {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: [{ $ifNull: [deal.businessModel?.assetLight, false] }, true] },
-                      { $in: ["Asset Light", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-                    ]
-                  },
-                  3, // Bonus points for asset light match
-                  0
-                ]
-              },
-              {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: [{ $ifNull: [deal.businessModel?.assetHeavy, false] }, true] },
-                      { $in: ["Asset Heavy", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-                    ]
-                  },
-                  3, // Bonus points for asset heavy match
-                  0
-                ]
-              }
-            ]
-          },
+            // CAPITAL AVAILABILITY MATCHING - Check if buyer's capital entity matches any of deal's capital availability requirements
+            capitalAvailabilityMatch: {
+              $cond: [
+                {
+                  $or: [
+                    // No capital availability criteria in deal
+                    { $eq: [{ $ifNull: [deal.buyerFit?.capitalAvailability, null] }, null] },
+                    { $eq: [{ $size: { $ifNull: [deal.buyerFit?.capitalAvailability, []] } }, 0] },
+                    // Check if buyer's capital entity matches any item in deal's capital availability array
+                    { $in: ["$capitalEntity", { $ifNull: [deal.buyerFit?.capitalAvailability, []] }] }
+                  ]
+                },
+                4,
+                0
+              ]
+            },
 
-          // CAPITAL AVAILABILITY MATCHING - Match deal's capital availability with buyer's
-          capitalAvailabilityMatch: {
-            $cond: [
-              {
-                $or: [
-                  // No capital availability criteria in deal
-                  { $eq: [{ $ifNull: [deal.buyerFit?.capitalAvailability, null] }, null] },
-                  { $eq: [{ $size: { $ifNull: [deal.buyerFit?.capitalAvailability, []] } }, 0] },
-                  // Check if buyer's capital entity matches deal's capital availability requirements
-                  { $in: ["$capitalEntity", { $ifNull: [deal.buyerFit?.capitalAvailability, []] }] }
-                ]
-              },
-              4,
-              0
-            ]
-          },
+            // COMPANY TYPE MATCHING - Check if buyer's company type matches any of deal's company types
+            companyTypeMatch: {
+              $cond: [
+                {
+                  $or: [
+                    // No company type specified in deal
+                    { $eq: [{ $ifNull: [deal.companyType, null] }, null] },
+                    { $eq: [{ $size: { $ifNull: [deal.companyType, []] } }, 0] },
+                    // Check if buyer's company type matches any item in deal's company type array
+                    { $in: ["$companyType", { $ifNull: [deal.companyType, []] }] }
+                  ]
+                },
+                4,
+                0
+              ]
+            },
 
-          // COMPANY TYPE MATCHING - Match deal's company type with buyer's company type
-          companyTypeMatch: {
-            $cond: [
-              {
-                $or: [
-                  // No company type specified in deal
-                  { $eq: [{ $ifNull: [deal.companyType, null] }, null] },
-                  { $eq: [{ $size: { $ifNull: [deal.companyType, []] } }, 0] },
-                  // Check if buyer's company type is in deal's company type array
-                  { $in: ["$companyType", { $ifNull: [deal.companyType, []] }] }
-                ]
-              },
-              4,
-              0
-            ]
-          },
+            // MINIMUM TRANSACTION SIZE MATCHING - Buyer's average deal size >= deal's minimum requirement
+            minTransactionSizeMatch: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: [{ $ifNull: [deal.buyerFit?.minTransactionSize, null] }, null] },
+                    { $gte: [{ $ifNull: ["$averageDealSize", 0] }, { $ifNull: [deal.buyerFit?.minTransactionSize, 0] }] }
+                  ]
+                },
+                5,
+                0
+              ]
+            },
 
-          // MINIMUM TRANSACTION SIZE MATCHING - Buyer's average deal size >= deal's minimum requirement
-          minTransactionSizeMatch: {
-            $cond: [
-              {
-                $or: [
-                  { $eq: [{ $ifNull: [deal.buyerFit?.minTransactionSize, null] }, null] },
-                  { $gte: [{ $ifNull: ["$averageDealSize", 0] }, { $ifNull: [deal.buyerFit?.minTransactionSize, 0] }] }
-                ]
-              },
-              5,
-              0
-            ]
-          },
+            // MINIMUM PRIOR ACQUISITIONS MATCHING - Buyer's deals completed >= deal's minimum requirement
+            priorAcquisitionsMatch: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: [{ $ifNull: [deal.buyerFit?.minPriorAcquisitions, null] }, null] },
+                    { $gte: [{ $ifNull: ["$dealsCompletedLast5Years", 0] }, { $ifNull: [deal.buyerFit?.minPriorAcquisitions, 0] }] }
+                  ]
+                },
+                5,
+                0
+              ]
+            },
 
-          // MINIMUM PRIOR ACQUISITIONS MATCHING - Buyer's deals completed >= deal's minimum requirement
-          priorAcquisitionsMatch: {
-            $cond: [
-              {
-                $or: [
-                  { $eq: [{ $ifNull: [deal.buyerFit?.minPriorAcquisitions, null] }, null] },
-                  { $gte: [{ $ifNull: ["$dealsCompletedLast5Years", 0] }, { $ifNull: [deal.buyerFit?.minPriorAcquisitions, 0] }] }
-                ]
-              },
-              5,
-              0
-            ]
-          },
-
-          // STAKE PERCENTAGE MATCHING - Deal stake percentage >= buyer's minimum requirement
-          stakePercentageMatch: {
-            $cond: [
-              {
-                $or: [
-                  { $eq: [{ $ifNull: ["$targetCriteria.minStakePercent", null] }, null] },
-                  { $eq: [{ $ifNull: [deal.stakePercentage, null] }, null] },
-                  { $gte: [{ $ifNull: [deal.stakePercentage, 100] }, { $ifNull: ["$targetCriteria.minStakePercent", 0] }] }
-                ]
-              },
-              4,
-              0
-            ]
+            // STAKE PERCENTAGE MATCHING - Deal stake percentage >= buyer's minimum requirement
+            stakePercentageMatch: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: [{ $ifNull: ["$targetCriteria.minStakePercent", null] }, null] },
+                    { $eq: [{ $ifNull: [deal.stakePercentage, null] }, null] },
+                    { $gte: [{ $ifNull: [deal.stakePercentage, 100] }, { $ifNull: ["$targetCriteria.minStakePercent", 0] }] }
+                  ]
+                },
+                4,
+                0
+              ]
+            }
           }
-        }
-      },
-      // Calculate total match score and percentage
-      {
-        $addFields: {
-          totalMatchScore: {
-            $sum: [
-              "$industryMatch",
-              "$geographyMatch",
-              "$revenueMatch",
-              "$ebitdaMatch",
-              "$transactionSizeMatch",
-              "$revenueGrowthMatch",
-              "$yearsMatch",
-              "$businessModelMatch",
-              "$capitalAvailabilityMatch",
-              "$companyTypeMatch",
-              "$minTransactionSizeMatch",
-              "$priorAcquisitionsMatch",
-              "$stakePercentageMatch"
-            ]
-          },
-          matchPercentage: {
-            $multiply: [
-              {
-                $divide: [
-                  {
-                    $sum: [
-                      "$industryMatch",
-                      "$geographyMatch",
-                      "$revenueMatch",
-                      "$ebitdaMatch",
-                      "$transactionSizeMatch",
-                      "$revenueGrowthMatch",
-                      "$yearsMatch",
-                      "$businessModelMatch",
-                      "$capitalAvailabilityMatch",
-                      "$companyTypeMatch",
-                      "$minTransactionSizeMatch",
-                      "$priorAcquisitionsMatch",
-                      "$stakePercentageMatch"
-                    ]
-                  },
-                  73 // Maximum possible score: 20+8+8+8+5+5+12+4+4+5+5+4 = 73
-                ]
-              },
-              100
-            ]
+        },
+        // Calculate total match score and percentage
+        {
+          $addFields: {
+            totalMatchScore: {
+              $sum: [
+                "$industryMatch",
+                "$geographyMatch",
+                "$revenueMatch",
+                "$ebitdaMatch",
+                "$revenueGrowthMatch",
+                "$yearsMatch",
+                "$businessModelMatch",
+                "$capitalAvailabilityMatch",
+                "$companyTypeMatch",
+                "$minTransactionSizeMatch",
+                "$priorAcquisitionsMatch",
+                "$stakePercentageMatch"
+              ]
+            },
+            matchPercentage: {
+              $multiply: [
+                {
+                  $divide: [
+                    {
+                      $sum: [
+                        "$industryMatch",
+                        "$geographyMatch",
+                        "$revenueMatch",
+                        "$ebitdaMatch",
+                        "$revenueGrowthMatch",
+                        "$yearsMatch",
+                        "$businessModelMatch",
+                        "$capitalAvailabilityMatch",
+                        "$companyTypeMatch",
+                        "$minTransactionSizeMatch",
+                        "$priorAcquisitionsMatch",
+                        "$stakePercentageMatch"
+                      ]
+                    },
+                    65 // Maximum possible score remains the same: 20+8+8+5+5+12+4+4+5+5+4 = 65
+                  ]
+                },
+                100
+              ]
+            }
           }
-        }
-      },
-      {
-        $project: {
-          _id: 1,
-          companyName: 1,
-          buyerId: "$buyer",
-          buyerName: "$buyerInfo.fullName",
-          buyerEmail: "$buyerInfo.email",
-          targetCriteria: 1,
-          preferences: 1,
-          companyType: 1,
-          capitalEntity: 1,
-          dealsCompletedLast5Years: 1,
-          averageDealSize: 1,
-          totalMatchScore: 1,
-          matchPercentage: { $round: ["$matchPercentage", 0] },
-          matchDetails: {
-            industryMatch: true, // Always true (mandatory)
-            geographyMatch: true, // Always true (mandatory)
-            revenueMatch: { $gt: ["$revenueMatch", 0] },
-            ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
-            transactionSizeMatch: { $gt: ["$transactionSizeMatch", 0] },
-            revenueGrowthMatch: { $gt: ["$revenueGrowthMatch", 0] },
-            yearsMatch: { $gt: ["$yearsMatch", 0] },
-            businessModelMatch: { $gt: ["$businessModelMatch", 0] },
-            capitalAvailabilityMatch: { $gt: ["$capitalAvailabilityMatch", 0] },
-            companyTypeMatch: { $gt: ["$companyTypeMatch", 0] },
-            minTransactionSizeMatch: { $gt: ["$minTransactionSizeMatch", 0] },
-            priorAcquisitionsMatch: { $gt: ["$priorAcquisitionsMatch", 0] },
-            stakePercentageMatch: { $gt: ["$stakePercentageMatch", 0] }
-          },
-          criteriaDetails: {
-            dealIndustry: deal.industrySector,
-            dealGeography: deal.geographySelection,
-            dealRevenue: deal.financialDetails?.trailingRevenueAmount,
-            dealEbitda: deal.financialDetails?.trailingEBITDAAmount,
-            dealTransactionSize: deal.financialDetails?.askingPrice,
-            dealAvgRevenueGrowth: deal.financialDetails?.avgRevenueGrowth,
-            dealYearsInBusiness: deal.yearsInBusiness,
-            dealStakePercentage: deal.stakePercentage,
-            dealCompanyType: deal.companyType,
-            dealCapitalAvailability: deal.buyerFit?.capitalAvailability,
-            dealMinTransactionSize: deal.buyerFit?.minTransactionSize,
-            dealMinPriorAcquisitions: deal.buyerFit?.minPriorAcquisitions
+        },
+        {
+          $project: {
+            _id: 1,
+            companyName: 1,
+            buyerId: "$buyer",
+            buyerName: "$buyerInfo.fullName",
+            buyerEmail: "$buyerInfo.email",
+            targetCriteria: 1,
+            preferences: 1,
+            companyType: 1,
+            capitalEntity: 1,
+            dealsCompletedLast5Years: 1,
+            averageDealSize: 1,
+            totalMatchScore: 1,
+            matchPercentage: { $round: ["$matchPercentage", 0] },
+            matchDetails: {
+              industryMatch: true, // Always true (mandatory)
+              geographyMatch: true, // Always true (mandatory)
+              revenueMatch: { $gt: ["$revenueMatch", 0] },
+              ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
+              revenueGrowthMatch: { $gt: ["$revenueGrowthMatch", 0] },
+              yearsMatch: { $gt: ["$yearsMatch", 0] },
+              businessModelMatch: { $gt: ["$businessModelMatch", 0] },
+              capitalAvailabilityMatch: { $gt: ["$capitalAvailabilityMatch", 0] },
+              companyTypeMatch: { $gt: ["$companyTypeMatch", 0] },
+              minTransactionSizeMatch: { $gt: ["$minTransactionSizeMatch", 0] },
+              priorAcquisitionsMatch: { $gt: ["$priorAcquisitionsMatch", 0] },
+              stakePercentageMatch: { $gt: ["$stakePercentageMatch", 0] }
+            },
+            criteriaDetails: {
+              dealIndustry: deal.industrySector,
+              dealGeography: deal.geographySelection,
+              dealRevenue: deal.financialDetails?.trailingRevenueAmount,
+              dealEbitda: deal.financialDetails?.trailingEBITDAAmount,
+              dealAvgRevenueGrowth: deal.financialDetails?.avgRevenueGrowth,
+              dealYearsInBusiness: deal.yearsInBusiness,
+              dealStakePercentage: deal.stakePercentage,
+              dealCompanyType: deal.companyType,
+              dealCapitalAvailability: deal.buyerFit?.capitalAvailability,
+              dealMinTransactionSize: deal.buyerFit?.minTransactionSize,
+              dealMinPriorAcquisitions: deal.buyerFit?.minPriorAcquisitions
+            }
           }
-        }
-      },
-      // Sort by match percentage in descending order
-      { $sort: { matchPercentage: -1 } },
-      // Changed minimum match threshold from 50% to 35%
-      { $match: { matchPercentage: { $gte: 35 } } }
-    ])
-    .exec();
+        },
+        // Sort by match percentage in descending order
+        { $sort: { matchPercentage: -1 } },
+        // Filter results with minimum match threshold of 35%
+        { $match: { matchPercentage: { $gte: 35 } } }
+      ])
+      .exec();
 
-  return matchingProfiles;
-}
+    return matchingProfiles;
+  }
   // ---------------------------------------------------------------------------------------------------------------------
 
 
