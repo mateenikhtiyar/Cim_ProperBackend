@@ -512,8 +512,8 @@ async getAllActiveDealsWithAccepted() {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
-  @Patch(":id")
+  @Roles('seller', 'admin')
+  @Patch(':id')
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update a deal" })
   @ApiParam({ name: "id", description: "Deal ID" })
@@ -524,7 +524,7 @@ async getAllActiveDealsWithAccepted() {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealsService.update(id, req.user.userId, updateDealDto)
+    return this.dealsService.update(id, req.user.userId, updateDealDto, req.user.role)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -141,12 +141,13 @@ export class DealsService {
     return deal.save();
   }
 
-  async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promise<Deal> {
+  async update(id: string, userId: string, updateDealDto: UpdateDealDto, userRole?: string): Promise<Deal> {
     const deal = await this.dealModel.findById(id).exec() as DealDocument;
     if (!deal) {
       throw new NotFoundException(`Deal with ID ${id} not found`);
     }
-    if (deal.seller.toString() !== sellerId) {
+    // Allow update if user is seller or admin
+    if (deal.seller.toString() !== userId && userRole !== 'admin') {
       throw new ForbiddenException("You don't have permission to update this deal");
     }
     console.log("[UPDATE] Incoming updateDealDto.documents:", JSON.stringify(updateDealDto.documents));
@@ -1849,7 +1850,7 @@ export class DealsService {
 
   async getAllCompletedDeals(): Promise<Deal[]> {
     try {
-      return await this.dealModel.find({ status: 'completed' }).exec();
+      return await this.dealModel.find({ status: 'completed' }).select('+rewardLevel').exec();
     } catch (error) {
       console.error('Error in getAllCompletedDeals:', error);
       throw new InternalServerErrorException(`Failed to fetch completed deals: ${error.message}`);
@@ -1873,7 +1874,7 @@ export class DealsService {
           },
           {
             $project: {
-              invitationStatusArray: 0,
+              invitationStatusArray: 0
             },
           },
         ])

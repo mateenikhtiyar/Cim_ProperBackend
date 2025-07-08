@@ -33,7 +33,12 @@ export class BuyersService {
   }
 
   async findAll(): Promise<Buyer[]> {
-    return this.buyerModel.find().exec()
+    const buyers = await this.buyerModel.find().populate('companyProfileId').lean().exec();
+    // Map companyProfileId to companyProfile for frontend compatibility
+    return buyers.map((buyer: any) => ({
+      ...buyer,
+      companyProfile: buyer.companyProfileId,
+    }));
   }
 
   async findOne(id: string): Promise<Buyer> {

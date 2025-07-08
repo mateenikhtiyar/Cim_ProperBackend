@@ -1,9 +1,9 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger } from "@nestjs/common";
-import { InjectModel } from "@nestjs/mongoose";
-import { Model } from "mongoose";
-import * as bcrypt from "bcrypt";
-import { Seller, SellerDocument } from "./schemas/seller.schema";
-import { GoogleSellerDto, RegisterSellerDto } from "./dto/create-seller.dto";
+import { Injectable, Logger, ConflictException, NotFoundException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { RegisterSellerDto } from './dto/create-seller.dto';
+import { UpdateSellerDto } from './dto/update-seller.dto';
+import { Seller, SellerDocument } from './schemas/seller.schema';
 
 @Injectable()
 export class SellersService {
@@ -11,170 +11,144 @@ export class SellersService {
 
   constructor(
     @InjectModel(Seller.name) private sellerModel: Model<SellerDocument>,
-  ) { }
+  ) {}
 
   async create(createSellerDto: RegisterSellerDto): Promise<Seller> {
     try {
-      const { email, password } = createSellerDto;
-
-      // Check if seller with this email already exists
-      const existingSeller = await this.sellerModel.findOne({ email }).exec();
+      const existingSeller = await this.sellerModel.findOne({ email: createSellerDto.email }).exec();
       if (existingSeller) {
-        throw new ConflictException("Email already exists");
+        throw new ConflictException('Email already exists');
       }
-
-      // Hash the password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Create new seller
-      const newSeller = new this.sellerModel({
+      const createdSeller = new this.sellerModel({
         ...createSellerDto,
-        password: hashedPassword,
-        role: "seller",
+        role: 'seller',
       });
-
-      // Save and return the seller (without password)
-      return newSeller.save();
+      return await createdSeller.save();
     } catch (error) {
-      this.logger.error(`Failed to create seller: ${error.message}`, error.stack);
-      if (error instanceof ConflictException) {
-        throw error;
-      }
-      throw new BadRequestException("Failed to create seller account");
+      this.logger.error(`Error creating seller: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
-  async findByEmail(email: string): Promise<Seller> {
+  async findAll(): Promise<Seller[]> {
     try {
-      const seller = await this.sellerModel.findOne({ email }).exec();
-      if (!seller) {
-        throw new NotFoundException("Seller not found");
-      }
-      return seller;
+      const sellers = await this.sellerModel.aggregate([
+        {
+          $lookup: {
+            from: 'deals',
+            localField: '_id',
+            foreignField: 'seller',
+            as: 'deals',
+          },
+        },
+        {
+          $project: {
+            companyName: 1,
+            fullName: 1,
+            email: 1,
+            phoneNumber: 1,
+            website: 1,
+            title: 1,
+            role: 1,
+            profilePicture: 1,
+            activeDealsCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  as: 'deal',
+                  cond: {
+                    $gt: [
+                      {
+                        $size: {
+                          $filter: {
+                            input: { $objectToArray: '$$deal.invitationStatus' },
+                            as: 'status',
+                            cond: { $eq: ['$$status.v.response', 'accepted'] },
+                          },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+            offMarketDealsCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  as: 'deal',
+                  cond: { $eq: ['$$deal.status', 'completed'] },
+                },
+              },
+            },
+          },
+        },
+      ]).exec();
+      this.logger.debug(`Fetched ${sellers.length} sellers with deal counts`);
+      this.logger.debug(`Seller deal counts: ${JSON.stringify(sellers.map(s => ({
+        email: s.email,
+        activeDealsCount: s.activeDealsCount,
+        offMarketDealsCount: s.offMarketDealsCount,
+      })))}`);
+      return sellers;
     } catch (error) {
-      this.logger.error(`Failed to find seller by email: ${error.message}`, error.stack);
+      this.logger.error(`Error fetching all sellers: ${error.message}`, error.stack);
       throw error;
     }
   }
 
   async findById(id: string): Promise<Seller> {
     try {
-      const seller = await this.sellerModel.findById(id).exec();
+      const seller = await this.sellerModel.findById(id).select('-password').exec();
       if (!seller) {
-        throw new NotFoundException("Seller not found");
+        throw new NotFoundException(`Seller with ID ${id} not found`);
       }
       return seller;
     } catch (error) {
-      this.logger.error(`Failed to find seller by ID: ${error.message}`, error.stack);
-      throw new NotFoundException("Seller not found");
+      this.logger.error(`Error finding seller by ID ${id}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
+  async findByEmail(email: string): Promise<Seller | null> {
+    try {
+      return await this.sellerModel.findOne({ email }).exec();
+    } catch (error) {
+      this.logger.error(`Error finding seller by email ${email}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  async update(id: string, updateSellerDto: UpdateSellerDto): Promise<Seller> {
+    try {
+      const updatedSeller = await this.sellerModel
+        .findByIdAndUpdate(id, { $set: updateSellerDto }, { new: true, runValidators: true })
+        .select('-password')
+        .exec();
+      if (!updatedSeller) {
+        throw new NotFoundException(`Seller with ID ${id} not found`);
+      }
+      return updatedSeller;
+    } catch (error) {
+      this.logger.error(`Error updating seller with ID ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
 
   async updateProfilePicture(id: string, profilePicturePath: string): Promise<Seller> {
     try {
-      const seller = await this.sellerModel.findById(id).exec();
-      if (!seller) {
-        throw new NotFoundException("Seller not found");
+      const updatedSeller = await this.sellerModel
+        .findByIdAndUpdate(id, { $set: { profilePicture: profilePicturePath } }, { new: true })
+        .select('-password')
+        .exec();
+      if (!updatedSeller) {
+        throw new NotFoundException(`Seller with ID ${id} not found`);
       }
-
-      seller.profilePicture = profilePicturePath;
-      return seller.save();
+      return updatedSeller;
     } catch (error) {
-      this.logger.error(`Failed to update profile picture: ${error.message}`, error.stack);
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      throw new BadRequestException("Failed to update profile picture");
-    }
-  }
-
-  async findAll(): Promise<Seller[]> {
-    try {
-      return this.sellerModel.find().select('-password').exec();
-    } catch (error) {
-      this.logger.error(`Failed to find all sellers: ${error.message}`, error.stack);
-      throw new BadRequestException("Failed to retrieve sellers");
-    }
-  }
-
-  async createFromGoogle(profile: any): Promise<{ seller: Seller; isNewUser: boolean }> {
-    try {
-      const { email, name, picture, sub } = profile;
-
-      // Check if seller already exists
-      let seller = await this.sellerModel.findOne({
-        $or: [
-          { email: email },
-          { googleId: sub }
-        ]
-      }).exec();
-
-      let isNewUser = false;
-
-      if (seller) {
-        // Update Google ID if not already set
-        if (!seller.googleId) {
-          seller.googleId = sub;
-          seller.isGoogleAccount = true;
-
-          // Update profile picture if available
-          if (picture && !seller.profilePicture) {
-            seller.profilePicture = picture;
-          }
-
-          seller = await seller.save();
-        }
-      } else {
-        // Create new seller from Google data
-        isNewUser = true;
-        const newSeller = new this.sellerModel({
-          email,
-          fullName: name,
-          companyName: "Set your company name", // Default value, user can update later
-          password: await bcrypt.hash(Math.random().toString(36), 10), // Random password
-          googleId: sub,
-          isGoogleAccount: true,
-          role: "seller",
-          profilePicture: picture || null,
-        });
-
-        seller = await newSeller.save();
-      }
-
-      return { seller, isNewUser };
-    } catch (error) {
-      this.logger.error(`Failed to create seller from Google: ${error.message}`, error.stack);
-      throw new BadRequestException("Failed to create seller from Google account");
-    }
-  }
-  async update(id: string, updateSellerDto: any): Promise<Seller> {
-    try {
-      const seller = await this.sellerModel.findById(id).exec();
-      if (!seller) {
-        throw new NotFoundException("Seller not found");
-      }
-
-      // Create a copy of the update data to avoid modifying the original
-      const updateData = { ...updateSellerDto };
-
-      // If password is being updated, hash it
-      if (updateData.password && updateData.password.trim()) {
-        updateData.password = await bcrypt.hash(updateData.password, 10);
-      } else {
-        // Remove password field if it's empty, undefined, or null
-        delete updateData.password;
-      }
-
-      // Update the seller
-      Object.assign(seller, updateData);
-      return seller.save();
-    } catch (error) {
-      this.logger.error(`Failed to update seller: ${error.message}`, error.stack);
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      throw new BadRequestException("Failed to update seller");
+      this.logger.error(`Error updating profile picture for seller with ID ${id}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
@@ -182,14 +156,51 @@ export class SellersService {
     try {
       const result = await this.sellerModel.findByIdAndDelete(id).exec();
       if (!result) {
-        throw new NotFoundException("Seller not found");
+        throw new NotFoundException(`Seller with ID ${id} not found`);
       }
     } catch (error) {
-      this.logger.error(`Failed to remove seller: ${error.message}`, error.stack);
-      if (error instanceof NotFoundException) {
-        throw error;
+      this.logger.error(`Error removing seller with ID ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  async createFromGoogle(profile: any): Promise<{ seller: Seller; isNewUser: boolean }> {
+    try {
+      const { email, name, picture, sub } = profile;
+      let seller = await this.sellerModel.findOne({
+        $or: [
+          { email: email },
+          { googleId: sub }
+        ]
+      }).exec();
+      let isNewUser = false;
+      if (seller) {
+        if (!seller.googleId) {
+          seller.googleId = sub;
+          seller.isGoogleAccount = true;
+          if (picture && !seller.profilePicture) {
+            seller.profilePicture = picture;
+          }
+          seller = await seller.save();
+        }
+      } else {
+        isNewUser = true;
+        const newSeller = new this.sellerModel({
+          email,
+          fullName: name,
+          companyName: "Set your company name",
+          password: Math.random().toString(36), // Set a random password (should be hashed if used)
+          googleId: sub,
+          isGoogleAccount: true,
+          role: "seller",
+          profilePicture: picture || null,
+        });
+        seller = await newSeller.save();
       }
-      throw new BadRequestException("Failed to remove seller");
+      return { seller, isNewUser };
+    } catch (error) {
+      this.logger.error(`Failed to create seller from Google: ${error.message}`, error.stack);
+      throw new Error("Failed to create seller from Google account");
     }
   }
 }
