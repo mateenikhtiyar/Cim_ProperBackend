@@ -512,8 +512,8 @@ async getAllActiveDealsWithAccepted() {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
-  @Patch(":id")
+  @Roles('seller', 'admin')
+  @Patch(':id')
   @ApiBearerAuth()
   @ApiOperation({ summary: "Update a deal" })
   @ApiParam({ name: "id", description: "Deal ID" })
@@ -524,7 +524,7 @@ async getAllActiveDealsWithAccepted() {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealsService.update(id, req.user.userId, updateDealDto)
+    return this.dealsService.update(id, req.user.userId, updateDealDto, req.user.role)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -653,10 +653,10 @@ async getAllActiveDealsWithAccepted() {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
+  @Roles("seller","admin")
   @Delete(":id")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Delete a deal" })
+  @ApiOperation({ summary: "Delete a deal(both admin and seller)" })
   @ApiParam({ name: "id", description: "Deal ID" })
   @ApiResponse({ status: 200, description: "Deal deleted successfully" })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
@@ -665,7 +665,7 @@ async getAllActiveDealsWithAccepted() {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    await this.dealsService.remove(id, req.user.userId)
+    await this.dealsService.remove(id, req.user.userId, req.user.role)
     return { message: "Deal deleted successfully" }
   }
   @UseGuards(JwtAuthGuard, RolesGuard)

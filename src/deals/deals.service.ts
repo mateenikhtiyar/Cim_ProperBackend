@@ -141,12 +141,13 @@ export class DealsService {
     return deal.save();
   }
 
-  async update(id: string, sellerId: string, updateDealDto: UpdateDealDto): Promise<Deal> {
+  async update(id: string, userId: string, updateDealDto: UpdateDealDto, userRole?: string): Promise<Deal> {
     const deal = await this.dealModel.findById(id).exec() as DealDocument;
     if (!deal) {
       throw new NotFoundException(`Deal with ID ${id} not found`);
     }
-    if (deal.seller.toString() !== sellerId) {
+    // Allow update if user is seller or admin
+    if (deal.seller.toString() !== userId && userRole !== 'admin') {
       throw new ForbiddenException("You don't have permission to update this deal");
     }
     console.log("[UPDATE] Incoming updateDealDto.documents:", JSON.stringify(updateDealDto.documents));
@@ -197,14 +198,15 @@ export class DealsService {
     return updatedDeal;
   }
 
-  async remove(id: string, sellerId: string): Promise<void> {
+  async remove(id: string, userId: string, userRole?: string): Promise<void> {
     const deal = await this.dealModel.findById(id).exec() as DealDocument;
 
     if (!deal) {
       throw new NotFoundException(`Deal with ID "${id}" not found`)
     }
 
-    if (deal.seller.toString() !== sellerId) {
+    // Allow admin to delete any deal
+    if (deal.seller.toString() !== userId && userRole !== 'admin') {
       throw new ForbiddenException("You don't have permission to delete this deal")
     }
 
@@ -1413,24 +1415,41 @@ export class DealsService {
       const buyerIds = new Set<string>();
       const buyerMap = new Map<string, BuyerStatus>();
 
+      // Prepare company profile model
+      const companyProfileModel = this.dealModel.db.model('CompanyProfile');
+
       // Process invitationStatus
       for (const { buyerId, response } of invitationStatusArray) {
         console.log(`Fetching buyer: ${buyerId}`);
-        const buyer = await this.buyerModel
-          .findById(buyerId)
-          .select('fullName email companyName')
-          .lean()
-          .exec();
+        const [buyer, companyProfile] = await Promise.all([
+          this.buyerModel
+            .findById(buyerId)
+            .select('fullName email companyName')
+            .lean()
+            .exec(),
+          companyProfileModel.findOne({ buyer: buyerId }).lean(),
+        ]);
         console.log(`Buyer ${buyerId}: ${JSON.stringify(buyer, null, 2)}`);
+        console.log(`CompanyProfile ${buyerId}: ${JSON.stringify(companyProfile, null, 2)}`);
         if (!buyer) {
           console.warn(`Buyer with ID ${buyerId} not found`);
           continue;
         }
+        // companyProfile may be an array if not using .findOne(), so handle both cases
+        let resolvedCompanyName = '';
+        if (companyProfile) {
+          if (Array.isArray(companyProfile)) {
+            resolvedCompanyName = companyProfile[0]?.companyName || '';
+          } else {
+            resolvedCompanyName = companyProfile.companyName || '';
+          }
+        }
+        const companyName = resolvedCompanyName || buyer.companyName || '';
         const buyerData: BuyerStatus = {
           buyerId,
           buyerName: buyer.fullName || 'Unknown',
           buyerEmail: buyer.email || '',
-          buyerCompany: buyer.companyName || '',
+          buyerCompany: companyName,
         };
         buyerMap.set(buyerId, buyerData);
         buyerIds.add(buyerId);
@@ -1455,12 +1474,24 @@ export class DealsService {
           console.warn(`Invalid buyerId in interactions: ${interaction.buyerId}`);
           continue;
         }
+        // Fetch company profile for interaction as well
+        const companyProfile = await companyProfileModel.findOne({ buyer: interaction.buyerId }).lean();
+        // companyProfile may be an array if not using .findOne(), so handle both cases
+        let resolvedCompanyNameInteraction = '';
+        if (companyProfile) {
+          if (Array.isArray(companyProfile)) {
+            resolvedCompanyNameInteraction = companyProfile[0]?.companyName || '';
+          } else {
+            resolvedCompanyNameInteraction = companyProfile.companyName || '';
+          }
+        }
+        const companyName = resolvedCompanyNameInteraction || interaction.buyerCompany || '';
         const existingBuyer = buyerMap.get(interaction.buyerId);
         const buyerData: BuyerStatus = {
           buyerId: interaction.buyerId,
           buyerName: interaction.buyerName || existingBuyer?.buyerName || 'Unknown',
           buyerEmail: interaction.buyerEmail || existingBuyer?.buyerEmail || '',
-          buyerCompany: interaction.buyerCompany || existingBuyer?.buyerCompany || '',
+          buyerCompany: companyName,
           companyType: interaction.companyType,
           lastInteraction: interaction.lastInteraction,
           totalInteractions: interaction.totalInteractions,
@@ -1489,8 +1520,14 @@ export class DealsService {
           existing.lastInteraction = interaction.lastInteraction || existing.lastInteraction;
           existing.totalInteractions = interaction.totalInteractions || existing.totalInteractions;
           existing.interactions = interaction.interactions || existing.interactions;
+          existing.buyerCompany = companyName;
         }
       }
+
+      // Debug: Print company names being sent in the status summary
+      console.log('Active Buyers Company Names:', buyersByStatus.active.map(b => ({ buyerId: b.buyerId, company: b.buyerCompany })));
+      console.log('Pending Buyers Company Names:', buyersByStatus.pending.map(b => ({ buyerId: b.buyerId, company: b.buyerCompany })));
+      console.log('Rejected Buyers Company Names:', buyersByStatus.rejected.map(b => ({ buyerId: b.buyerId, company: b.buyerCompany })));
 
       const result = {
         deal,
@@ -1784,7 +1821,7 @@ export class DealsService {
 
   async getAllCompletedDeals(): Promise<Deal[]> {
     try {
-      return await this.dealModel.find({ status: 'completed' }).exec();
+      return await this.dealModel.find({ status: 'completed' }).select('+rewardLevel').exec();
     } catch (error) {
       console.error('Error in getAllCompletedDeals:', error);
       throw new InternalServerErrorException(`Failed to fetch completed deals: ${error.message}`);
@@ -1808,7 +1845,7 @@ export class DealsService {
           },
           {
             $project: {
-              invitationStatusArray: 0,
+              invitationStatusArray: 0
             },
           },
         ])
