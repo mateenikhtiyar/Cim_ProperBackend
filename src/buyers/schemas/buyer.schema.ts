@@ -25,13 +25,12 @@ export class Buyer {
   @Prop({ default: "buyer" })
   role: string
 
-
-  @ApiProperty({ description: "Phone number of the buyer", nullable: true })
-  @Prop({ type: String, required: false, default: null })
+  @ApiProperty({ description: "Phone number of the buyer" })
+  @Prop({ type: String, required: true })
   phone: string
 
-  @ApiProperty({ description: "Phone number of the buyer", nullable: true })
-  @Prop({ type: String, required: false, default: null })
+  @ApiProperty({ description: "Company name of the buyer" })
+  @Prop({ type: String, required: true })
   companyName: string
 
   @ApiProperty({ description: "Reference to the company profile", nullable: true })
