@@ -198,14 +198,15 @@ export class DealsService {
     return updatedDeal;
   }
 
-  async remove(id: string, sellerId: string): Promise<void> {
+  async remove(id: string, userId: string, userRole?: string): Promise<void> {
     const deal = await this.dealModel.findById(id).exec() as DealDocument;
 
     if (!deal) {
       throw new NotFoundException(`Deal with ID "${id}" not found`)
     }
 
-    if (deal.seller.toString() !== sellerId) {
+    // Allow admin to delete any deal
+    if (deal.seller.toString() !== userId && userRole !== 'admin') {
       throw new ForbiddenException("You don't have permission to delete this deal")
     }
 
@@ -642,7 +643,29 @@ async findMatchingBuyers(dealId: string): Promise<any[]> {
     ])
     .exec();
 
-  return matchingProfiles;
+  let alreadyInvited: Set<string>;
+  if (deal.invitationStatus instanceof Map) {
+    alreadyInvited = new Set(Array.from(deal.invitationStatus.keys()).map((id) => id.toString()));
+  } else {
+    alreadyInvited = new Set(Object.keys(deal.invitationStatus || {}).map((id) => id.toString()));
+  }
+
+  // Debug logs to help diagnose ID mismatches
+  console.log('alreadyInvited:', Array.from(alreadyInvited));
+  console.log('matchingProfiles IDs:', matchingProfiles.map(p => ({
+    buyerId: p.buyerId,
+    _id: p._id
+  })));
+
+  const filteredProfiles = matchingProfiles.filter(
+    (profile: any) => {
+      // Ensure buyerId is always a string for comparison
+      const id = (profile.buyerId && profile.buyerId.toString()) || "";
+      return !alreadyInvited.has(id);
+    }
+  );
+
+  return filteredProfiles;
 }
   // ---------------------------------------------------------------------------------------------------------------------
 
@@ -1444,24 +1467,41 @@ async findMatchingBuyers(dealId: string): Promise<any[]> {
       const buyerIds = new Set<string>();
       const buyerMap = new Map<string, BuyerStatus>();
 
+      // Prepare company profile model
+      const companyProfileModel = this.dealModel.db.model('CompanyProfile');
+
       // Process invitationStatus
       for (const { buyerId, response } of invitationStatusArray) {
         console.log(`Fetching buyer: ${buyerId}`);
-        const buyer = await this.buyerModel
-          .findById(buyerId)
-          .select('fullName email companyName')
-          .lean()
-          .exec();
+        const [buyer, companyProfile] = await Promise.all([
+          this.buyerModel
+            .findById(buyerId)
+            .select('fullName email companyName')
+            .lean()
+            .exec(),
+          companyProfileModel.findOne({ buyer: buyerId }).lean(),
+        ]);
         console.log(`Buyer ${buyerId}: ${JSON.stringify(buyer, null, 2)}`);
+        console.log(`CompanyProfile ${buyerId}: ${JSON.stringify(companyProfile, null, 2)}`);
         if (!buyer) {
           console.warn(`Buyer with ID ${buyerId} not found`);
           continue;
         }
+        // companyProfile may be an array if not using .findOne(), so handle both cases
+        let resolvedCompanyName = '';
+        if (companyProfile) {
+          if (Array.isArray(companyProfile)) {
+            resolvedCompanyName = companyProfile[0]?.companyName || '';
+          } else {
+            resolvedCompanyName = companyProfile.companyName || '';
+          }
+        }
+        const companyName = resolvedCompanyName || buyer.companyName || '';
         const buyerData: BuyerStatus = {
           buyerId,
           buyerName: buyer.fullName || 'Unknown',
           buyerEmail: buyer.email || '',
-          buyerCompany: buyer.companyName || '',
+          buyerCompany: companyName,
         };
         buyerMap.set(buyerId, buyerData);
         buyerIds.add(buyerId);
@@ -1486,12 +1526,24 @@ async findMatchingBuyers(dealId: string): Promise<any[]> {
           console.warn(`Invalid buyerId in interactions: ${interaction.buyerId}`);
           continue;
         }
+        // Fetch company profile for interaction as well
+        const companyProfile = await companyProfileModel.findOne({ buyer: interaction.buyerId }).lean();
+        // companyProfile may be an array if not using .findOne(), so handle both cases
+        let resolvedCompanyNameInteraction = '';
+        if (companyProfile) {
+          if (Array.isArray(companyProfile)) {
+            resolvedCompanyNameInteraction = companyProfile[0]?.companyName || '';
+          } else {
+            resolvedCompanyNameInteraction = companyProfile.companyName || '';
+          }
+        }
+        const companyName = resolvedCompanyNameInteraction || interaction.buyerCompany || '';
         const existingBuyer = buyerMap.get(interaction.buyerId);
         const buyerData: BuyerStatus = {
           buyerId: interaction.buyerId,
           buyerName: interaction.buyerName || existingBuyer?.buyerName || 'Unknown',
           buyerEmail: interaction.buyerEmail || existingBuyer?.buyerEmail || '',
-          buyerCompany: interaction.buyerCompany || existingBuyer?.buyerCompany || '',
+          buyerCompany: companyName,
           companyType: interaction.companyType,
           lastInteraction: interaction.lastInteraction,
           totalInteractions: interaction.totalInteractions,
@@ -1520,8 +1572,14 @@ async findMatchingBuyers(dealId: string): Promise<any[]> {
           existing.lastInteraction = interaction.lastInteraction || existing.lastInteraction;
           existing.totalInteractions = interaction.totalInteractions || existing.totalInteractions;
           existing.interactions = interaction.interactions || existing.interactions;
+          existing.buyerCompany = companyName;
         }
       }
+
+      // Debug: Print company names being sent in the status summary
+      console.log('Active Buyers Company Names:', buyersByStatus.active.map(b => ({ buyerId: b.buyerId, company: b.buyerCompany })));
+      console.log('Pending Buyers Company Names:', buyersByStatus.pending.map(b => ({ buyerId: b.buyerId, company: b.buyerCompany })));
+      console.log('Rejected Buyers Company Names:', buyersByStatus.rejected.map(b => ({ buyerId: b.buyerId, company: b.buyerCompany })));
 
       const result = {
         deal,

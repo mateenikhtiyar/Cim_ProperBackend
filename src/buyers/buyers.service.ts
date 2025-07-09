@@ -42,11 +42,11 @@ export class BuyersService {
   }
 
   async findOne(id: string): Promise<Buyer> {
-    const buyer = await this.buyerModel.findById(id).exec()
+    const buyer = await this.buyerModel.findById(id).populate('companyProfileId').exec();
     if (!buyer) {
       throw new NotFoundException("Buyer not found")
     }
-    return buyer
+    return buyer;
   }
 
   async findByEmail(email: string): Promise<Buyer> {
@@ -58,11 +58,11 @@ export class BuyersService {
   }
 
   async findById(id: string): Promise<Buyer> {
-    const buyer = await this.buyerModel.findById(id).exec()
+    const buyer = await this.buyerModel.findById(id).populate('companyProfileId').exec();
     if (!buyer) {
       throw new NotFoundException("Buyer not found")
     }
-    return buyer
+    return buyer;
   }
 
   async update(id: string, updateBuyerDto: UpdateBuyerDto): Promise<Buyer> {
