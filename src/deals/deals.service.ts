@@ -574,7 +574,7 @@ export class DealsService {
           }
         },
         // CHANGED: FILTER FOR 50% MATCHES OR HIGHER
-        { $match: { matchPercentage: { $gte: 100 } } },
+        { $match: { matchPercentage: { $gte: 90 } } },
         {
           $project: {
             _id: 1,
