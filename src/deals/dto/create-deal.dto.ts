@@ -96,7 +96,7 @@ export class BuyerFitDto {
     description: "Capital Availability options",
     enum: CapitalAvailability,
     isArray: true,
-    example: ["Ready to deploy immediately", "Need to raise"],
+    example: ["Ready to deploy immediately immediately", "Need to raise"],
     required: false,
   })
   @IsArray()
@@ -150,10 +150,11 @@ export class CreateDealDto {
   @IsString()
   companyDescription: string
 
-  @ApiProperty({ description: "Type of company", example: "SaaS Company", required: false })
-  @IsString()
+  @ApiProperty({ description: "Type of company", example: ["Family Office", "Buy Side Mandate"], required: false, isArray: true })
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
-  companyType?: string
+  companyType?: string[];
 
   @ApiProperty({ description: "Type of deal", enum: DealType, example: DealType.ACQUISITION })
   @IsEnum(DealType)

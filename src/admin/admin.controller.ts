@@ -52,6 +52,23 @@ export class AdminController {
     return this.adminService.findById(req.user.userId);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('profile')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update admin profile' })
+  @ApiResponse({ status: 200, description: 'Admin profile updated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async updateProfile(@Request() req: RequestWithUser, @Body() update: any) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+    const updated = await this.adminService.updateProfile(req.user.userId, update);
+    const result = updated.toObject ? updated.toObject() : { ...updated };
+    delete result.password;
+    return result;
+  }
+
   // Company Profile Management for Admins
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("admin")

@@ -51,6 +51,15 @@ export class AdminService {
     return admin
   }
 
+  async updateProfile(id: string, update: Partial<Admin>): Promise<Admin> {
+    const admin = await this.adminModel.findById(id).exec();
+    if (!admin) {
+      throw new NotFoundException("Admin not found");
+    }
+    Object.assign(admin, update);
+    return admin.save();
+  }
+
   // Company Profile Management
   async getAllCompanyProfiles(): Promise<CompanyProfile[]> {
     return this.companyProfileModel.find().exec()

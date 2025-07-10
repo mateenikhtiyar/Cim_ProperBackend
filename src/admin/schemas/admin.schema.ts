@@ -25,6 +25,12 @@ export class Admin {
   @Prop({ default: "admin" })
   role: string
 
+  @ApiProperty({ description: "Profile picture URL or path", required: false })
+  @Prop({ required: false })
+  profilePicture?: string;
+
+  
+
   // Ensure Mongoose methods are properly typed
   toObject?(): any
 }
