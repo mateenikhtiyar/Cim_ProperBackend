@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { RegisterSellerDto } from './dto/create-seller.dto';
 import { UpdateSellerDto } from './dto/update-seller.dto';
 import { Seller, SellerDocument } from './schemas/seller.schema';
+import * as bcrypt from "bcrypt";
 
 @Injectable()
 export class SellersService {
@@ -19,8 +20,11 @@ export class SellersService {
       if (existingSeller) {
         throw new ConflictException('Email already exists');
       }
+      // Hash the password before saving
+      const hashedPassword = await bcrypt.hash(createSellerDto.password, 10);
       const createdSeller = new this.sellerModel({
         ...createSellerDto,
+        password: hashedPassword,
         role: 'seller',
       });
       return await createdSeller.save();
