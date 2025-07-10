@@ -176,9 +176,9 @@ export class Deal {
   @Prop({ required: true })
   companyDescription!: string
 
-  @ApiProperty({ description: "Type of company", example: "SaaS Company" })
+  @ApiProperty({ description: "Type of company", example: ["Family Office", "Buy Side Mandate"], isArray: true })
   @Prop({ type: [String], required: false })
-companyType?: string[];
+  companyType?: string[];
 
 
   @ApiProperty({ description: "Type of deal", enum: DealType })

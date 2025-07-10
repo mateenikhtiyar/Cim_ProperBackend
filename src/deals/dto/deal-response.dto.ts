@@ -11,8 +11,8 @@ export class DealResponseDto {
   @ApiProperty({ example: "Established SaaS company with recurring revenue seeking acquisition." })
   companyDescription: string
 
-  @ApiProperty({ example: "SaaS Company" })
-  companyType?: string
+  @ApiProperty({ example: ["Family Office", "Buy Side Mandate"] })
+  companyType?: string[];
 
   @ApiProperty({ enum: DealType, example: DealType.ACQUISITION })
   dealType: DealType

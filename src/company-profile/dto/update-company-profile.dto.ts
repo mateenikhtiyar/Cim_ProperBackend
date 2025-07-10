@@ -62,7 +62,7 @@ export class UpdateCompanyProfileDto {
   @IsOptional()
   selectedCurrency?: string
 
-  @ApiProperty({ example: "ready to deploy", description: "Capital availability" })
+  @ApiProperty({ example: "Ready to deploy immediately", description: "Capital availability" })
   @IsString()
   @IsOptional()
   capitalAvailability?: string
