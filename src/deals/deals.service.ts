@@ -260,6 +260,13 @@ export class DealsService {
         "preferences.doNotSendMarketedDeals": { $ne: true }
       };
     }
+    // Get only real buyer IDs from invitationStatus (Map or object)
+    const alreadyInvitedBuyerIds = deal.invitationStatus instanceof Map
+      ? Array.from(deal.invitationStatus.keys())
+      : Object.keys(deal.invitationStatus || {});
+    console.log('DEBUG: alreadyInvitedBuyerIds:', alreadyInvitedBuyerIds);
+    const companyProfiles = await companyProfileModel.find({}).lean();
+    console.log('DEBUG: CompanyProfile buyers:', companyProfiles.map(cp => cp.buyer));
     const mandatoryQuery: any = {
       "preferences.stopSendingDeals": { $ne: true },
       "targetCriteria.countries": { $in: expandedGeos },
@@ -268,6 +275,16 @@ export class DealsService {
     };
     const matchingProfiles = await companyProfileModel.aggregate([
       { $match: mandatoryQuery },
+      ...(alreadyInvitedBuyerIds.length > 0
+        ? [
+            {
+              $addFields: {
+                buyerStr: { $toString: "$buyer" }
+              }
+            },
+            { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
+          ]
+        : []),
       {
         $lookup: {
           from: 'buyers',
