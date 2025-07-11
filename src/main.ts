@@ -10,7 +10,7 @@ import * as express from "express"
 async function bootstrap() {
   try {
     const app = await NestFactory.create<NestExpressApplication>(AppModule);
-    let frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000"
+    let frontendUrl = process.env.FRONTEND_URL || "https://buyer.cimamplify.com"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
@@ -65,7 +65,7 @@ async function bootstrap() {
     console.log("Static files will be served from: /uploads/")
     await app.listen(3001)
     console.log("Application running on port 3001")
-  console.log("Swagger documentation available at: http://localhost:3001/api")
+    console.log("Swagger documentation available at: http://localhost:3001/api")
   } catch (error) {
     console.error("Failed to start application:", error)
   }
