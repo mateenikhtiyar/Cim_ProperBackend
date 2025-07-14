@@ -722,4 +722,5 @@ async getAllActiveDealsWithAccepted() {
       throw error
     }
   }
+
 }
