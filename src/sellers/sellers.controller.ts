@@ -121,6 +121,7 @@ export class SellersController {
         phone: seller.phoneNumber,
         phoneNumber: seller.phoneNumber,
         role: seller.role,
+        website: seller.website, // <-- Add this line
       };
       return publicSellerInfo;
     } catch (error) {

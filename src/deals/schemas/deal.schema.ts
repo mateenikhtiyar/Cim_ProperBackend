@@ -301,6 +301,18 @@ export class Deal {
   @ApiProperty({ description: "Deals completed in the last 5 years", example: 5 })
   @Prop({ required: false })
   dealsCompletedLast5Years?: number;
+
+  @ApiProperty({ description: "The buyer (ObjectId) the deal was closed with, if from CIM Amplify", required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: "Buyer", required: false })
+  closedWithBuyer?: string;
+
+  @ApiProperty({ description: "The company name of the buyer the deal was closed with, if from CIM Amplify", required: false })
+  @Prop({ required: false })
+  closedWithBuyerCompany?: string;
+
+  @ApiProperty({ description: "The email of the buyer the deal was closed with, if from CIM Amplify", required: false })
+  @Prop({ required: false })
+  closedWithBuyerEmail?: string;
 }
 
 export const DealSchema = SchemaFactory.createForClass(Deal)
