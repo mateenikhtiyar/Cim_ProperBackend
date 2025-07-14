@@ -179,7 +179,12 @@ export class DealsService {
       }
     }
     const { documents, ...updateDataWithoutDocuments } = updateDealDto;
-    Object.assign(deal, updateDataWithoutDocuments);
+    // Only update provided fields, do not overwrite required fields with undefined
+    for (const [key, value] of Object.entries(updateDataWithoutDocuments)) {
+      if (typeof value !== "undefined") {
+        (deal as any)[key] = value;
+      }
+    }
     if (deal.visibility) {
       const rewardLevelMap: Record<string, 'Seed' | 'Bloom' | 'Fruit'> = {
         seed: 'Seed',
@@ -277,13 +282,14 @@ export class DealsService {
       { $match: mandatoryQuery },
       ...(alreadyInvitedBuyerIds.length > 0
         ? [
-          {
-            $addFields: {
-              buyerStr: { $toString: "$buyer" }
-            }
-          },
-          { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
-        ]
+            {
+              $addFields: {
+                buyerStr: { $toString: "$buyer" }
+              }
+            },
+            { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
+          ]
+
         : []),
       {
         $lookup: {
@@ -1165,6 +1171,13 @@ export class DealsService {
 
     if (winningBuyerId) {
       trackingData.buyer = winningBuyerId;
+      // Store buyer info in the deal document
+      const buyer = await this.buyerModel.findById(winningBuyerId).lean();
+      if (buyer) {
+        dealDoc.closedWithBuyer = winningBuyerId;
+        dealDoc.closedWithBuyerCompany = buyer.companyName || '';
+        dealDoc.closedWithBuyerEmail = buyer.email || '';
+      }
     }
 
     const tracking = new dealTrackingModel(trackingData);
