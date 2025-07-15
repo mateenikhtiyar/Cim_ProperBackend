@@ -1134,17 +1134,19 @@ export class DealsService {
 
   async closeDealseller(
     dealId: string,
-    sellerId: string,
+    userId: string,
     finalSalePrice?: number,
     notes?: string,
     winningBuyerId?: string,
+    userRole?: string,
   ): Promise<Deal> {
     const dealDoc = await this.dealModel.findById(dealId).exec();
     if (!dealDoc) {
       throw new NotFoundException(`Deal with ID "${dealId}" not found`);
     }
 
-    if (dealDoc.seller.toString() !== sellerId) {
+    // Only check seller for sellers; allow admin
+    if (userRole !== 'admin' && dealDoc.seller.toString() !== userId) {
       throw new ForbiddenException("You don't have permission to close this deal");
     }
 
@@ -1158,6 +1160,21 @@ export class DealsService {
       }
       dealDoc.financialDetails.finalSalePrice = finalSalePrice;
       dealDoc.markModified('financialDetails');
+    }
+
+    // Ensure rewardLevel is set (required)
+    if (!dealDoc.rewardLevel) {
+      const rewardLevelMap: Record<string, 'Seed' | 'Bloom' | 'Fruit'> = {
+        seed: 'Seed',
+        bloom: 'Bloom',
+        fruit: 'Fruit',
+      };
+      dealDoc.rewardLevel = rewardLevelMap[(dealDoc.visibility || '').toLowerCase()] || 'Seed';
+    }
+
+    // Ensure managementPreferences is a string
+    if (dealDoc.managementPreferences && typeof dealDoc.managementPreferences !== 'string') {
+      dealDoc.managementPreferences = JSON.stringify(dealDoc.managementPreferences);
     }
 
     const dealTrackingModel = this.dealModel.db.model('DealTracking');
