@@ -567,7 +567,7 @@ async getAllActiveDealsWithAccepted() {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
+  @Roles("seller", "admin")
   @Post(":id/close-deal")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Close a deal (seller only)" })
@@ -608,6 +608,7 @@ async getAllActiveDealsWithAccepted() {
       body.finalSalePrice,
       body.notes,
       body.winningBuyerId,
+      req.user.role,
     )
 
     return {
@@ -669,7 +670,7 @@ async getAllActiveDealsWithAccepted() {
     return { message: "Deal deleted successfully" }
   }
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles("seller")
+  @Roles("seller", "admin")
   @Post(":id/close")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Close a deal (seller only)" })
@@ -711,6 +712,7 @@ async getAllActiveDealsWithAccepted() {
         body.finalSalePrice,
         body.notes,
         body.winningBuyerId,
+        req.user.role,
       )
 
       return {
