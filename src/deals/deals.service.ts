@@ -289,6 +289,7 @@ export class DealsService {
             },
             { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
           ]
+
         : []),
       {
         $lookup: {
@@ -1576,3 +1577,4 @@ export class DealsService {
     }
   }
 }
+
