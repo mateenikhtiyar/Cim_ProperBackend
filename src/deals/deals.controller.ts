@@ -17,11 +17,12 @@ import {
   HttpException,
   HttpStatus,
   Res,
+  Query,
 } from "@nestjs/common"
 import { FilesInterceptor } from "@nestjs/platform-express"
 import { diskStorage } from "multer"
 import { extname } from "path"
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody, ApiConsumes } from "@nestjs/swagger"
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody, ApiConsumes, ApiQuery } from "@nestjs/swagger"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
@@ -280,6 +281,56 @@ export class DealsController {
 @ApiResponse({ status: 200, description: 'List of deals with accepted invitations', type: [DealResponseDto] })
 async getAllActiveDealsWithAccepted() {
   return this.dealsService.getAllActiveDealsWithAccepted();
+}
+
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+@Get('admin/buyer/:buyerId/status-counts')
+@ApiBearerAuth()
+@ApiOperation({ summary: 'Get deal counts by status for a buyer (admin only)' })
+@ApiParam({ name: 'buyerId', description: 'Buyer ID' })
+@ApiResponse({ status: 200, description: 'Deal status counts for the buyer', schema: { example: { active: 2, pending: 1, rejected: 0 } } })
+async getBuyerDealStatusCounts(@Param('buyerId') buyerId: string) {
+  const [active, pending, rejected] = await Promise.all([
+    this.dealsService.getBuyerDeals(buyerId, 'active'),
+    this.dealsService.getBuyerDeals(buyerId, 'pending'),
+    this.dealsService.getBuyerDeals(buyerId, 'rejected'),
+  ]);
+  return {
+    active: active.length,
+    pending: pending.length,
+    rejected: rejected.length,
+  };
+}
+
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+@Get('admin/buyer/:buyerId/deals')
+@ApiBearerAuth()
+@ApiOperation({ summary: 'Get all deals for a buyer by status (admin only)' })
+@ApiParam({ name: 'buyerId', description: 'Buyer ID' })
+@ApiQuery({ name: 'status', required: false, enum: ['active', 'pending', 'rejected'], description: 'Deal status' })
+@ApiResponse({ status: 200, description: 'Deals for the buyer', type: [Object] })
+async getBuyerDealsByStatus(@Param('buyerId') buyerId: string, @Query('status') status?: 'active' | 'pending' | 'rejected') {
+  return this.dealsService.getBuyerDeals(buyerId, status);
+}
+
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+@Get('admin/seller/:sellerId/deals')
+@ApiBearerAuth()
+@ApiOperation({ summary: 'Get all deals for a seller by status (admin only)' })
+@ApiParam({ name: 'sellerId', description: 'Seller ID' })
+@ApiQuery({ name: 'status', required: false, enum: ['active', 'completed'], description: 'Deal status' })
+@ApiResponse({ status: 200, description: 'Deals for the seller', type: [Object] })
+async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status') status?: 'active' | 'completed') {
+  if (status === 'completed') {
+    return this.dealsService.getCompletedDeals(sellerId);
+  } else if (status === 'active') {
+    return this.dealsService.getSellerActiveDeals(sellerId);
+  } else {
+    return this.dealsService.findBySeller(sellerId);
+  }
 }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
