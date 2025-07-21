@@ -730,50 +730,37 @@ export class DealsService {
 
   // Replace the existing getBuyerDeals method with this improved version
   async getBuyerDeals(buyerId: string, status?: "pending" | "active" | "rejected" | "completed"): Promise<Deal[]> {
-    const baseQuery: any = {
-      $or: [{ targetedBuyers: buyerId }, { isPublic: true, status: { $in: [DealStatus.ACTIVE, DealStatus.DRAFT] } }],
-    }
-
     if (status === "active") {
-      // Deals where buyer has shown interest (regardless of deal status)
-      baseQuery.interestedBuyers = buyerId
-      // Remove the deal status restriction for active buyer deals
-      delete baseQuery.$or
-      baseQuery.targetedBuyers = buyerId
-      // Exclude completed deals unless specifically requested
-      baseQuery.status = { $ne: DealStatus.COMPLETED }
+      // Only deals where invitationStatus[buyerId].response === 'accepted'
+      return this.dealModel.find({
+        [`invitationStatus.${buyerId}.response`]: "accepted",
+        status: { $ne: DealStatus.COMPLETED },
+      }).sort({ "timeline.updatedAt": -1 }).exec();
     } else if (status === "rejected") {
-      // Deals that were targeted to buyer but they rejected
-      baseQuery.targetedBuyers = buyerId
-      baseQuery.interestedBuyers = { $ne: buyerId }
-      // Exclude completed deals unless specifically requested
-      baseQuery.status = { $ne: DealStatus.COMPLETED }
-
-      // Check invitation status for explicit rejections
-      baseQuery.$or = [{ [`invitationStatus.${buyerId}.response`]: "rejected" }]
-    } else if (status === "completed") {
-      baseQuery.status = DealStatus.COMPLETED
-      baseQuery.interestedBuyers = buyerId
+      // Only deals where invitationStatus[buyerId].response === 'rejected'
+      return this.dealModel.find({
+        [`invitationStatus.${buyerId}.response`]: "rejected",
+        status: { $ne: DealStatus.COMPLETED },
+      }).sort({ "timeline.updatedAt": -1 }).exec();
     } else if (status === "pending") {
-      // Deals targeted to buyer but no response yet, or explicitly set as pending
-      baseQuery.targetedBuyers = buyerId
-      // Exclude completed deals unless specifically requested
-      baseQuery.status = { $ne: DealStatus.COMPLETED }
-      baseQuery.$and = [
-        {
-          $or: [{ interestedBuyers: { $ne: buyerId } }, { [`invitationStatus.${buyerId}.response`]: "pending" }],
-        },
-        {
-          [`invitationStatus.${buyerId}.response`]: { $ne: "rejected" },
-        },
-      ]
+      // Only deals where invitationStatus[buyerId].response === 'pending'
+      return this.dealModel.find({
+        [`invitationStatus.${buyerId}.response`]: "pending",
+        status: { $ne: DealStatus.COMPLETED },
+      }).sort({ "timeline.updatedAt": -1 }).exec();
+    } else if (status === "completed") {
+      // Only deals where invitationStatus[buyerId].response === 'accepted' and deal is completed
+      return this.dealModel.find({
+        [`invitationStatus.${buyerId}.response`]: "accepted",
+        status: DealStatus.COMPLETED,
+      }).sort({ "timeline.completedAt": -1 }).exec();
     } else {
-      // Default case: exclude completed deals (similar to findBySeller behavior)
-      baseQuery.status = { $ne: DealStatus.COMPLETED }
+      // Default: all deals targeted to buyer (excluding completed)
+      return this.dealModel.find({
+        targetedBuyers: buyerId,
+        status: { $ne: DealStatus.COMPLETED },
+      }).sort({ "timeline.updatedAt": -1 }).exec();
     }
-
-    const deals = await this.dealModel.find(baseQuery).sort({ "timeline.updatedAt": -1 }).exec()
-    return deals
   }
 
   async getBuyerDealsWithPagination(
@@ -1575,6 +1562,28 @@ export class DealsService {
       console.error('Error in getBuyerEngagementDashboard:', error);
       throw new InternalServerErrorException(`Failed to get buyer engagement dashboard: ${error.message}`);
     }
+  }
+
+  // Add a method for seller's true active deals (at least one invitationStatus.response === 'accepted')
+  async getSellerActiveDeals(sellerId: string): Promise<Deal[]> {
+    return this.dealModel.find({
+      seller: sellerId,
+      status: { $ne: DealStatus.COMPLETED },
+      $expr: {
+        $gt: [
+          {
+            $size: {
+              $filter: {
+                input: { $objectToArray: "$invitationStatus" },
+                as: "inv",
+                cond: { $eq: ["$$inv.v.response", "accepted"] },
+              },
+            },
+          },
+          0,
+        ],
+      },
+    }).sort({ "timeline.updatedAt": -1 }).exec();
   }
 }
 
