@@ -14,6 +14,10 @@ import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config'
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Seller } from '../sellers/schemas/seller.schema';
+import { v4 as uuidv4 } from 'uuid';
+import { EmailVerification, EmailVerificationDocument } from './schemas/email-verification.schema';
+import { User, User as UserType } from './interfaces/user.interface'; // create if missing
+
 
 @Injectable()
 export class AuthService {
@@ -29,6 +33,8 @@ export class AuthService {
     private buyerModel: Model<BuyerDocument>,
     @InjectModel(Seller.name)
     private sellerModel: Model<Seller>,
+    @InjectModel(EmailVerification.name)
+  private readonly emailVerificationModel: Model<EmailVerificationDocument>,
     private readonly mailService: MailService
   ) { }
 
@@ -45,6 +51,9 @@ export class AuthService {
       }
 
       if (user && (await bcrypt.compare(password, user.password))) {
+        if (!user.isEmailVerified) {
+          throw new UnauthorizedException('Please verify your email before logging in.');
+        }
         const result = user.toObject ? user.toObject() : { ...user };
         delete result.password;
         return result;
@@ -326,6 +335,75 @@ async resetPasswordSeller(dto: ResetPasswordDto) {
   await seller.save()
 
   return 'Password has been updated successfully'
+}
+
+//Email verification
+
+
+
+async sendVerificationEmail(user: User) {
+  const token = uuidv4();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+  await this.emailVerificationModel.create({
+    userId: user._id,
+    token,
+    isUsed: false,
+    expiresAt,
+  });
+
+  const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+
+  const emailBody = `
+    Hello ${user.fullName},
+
+    Thank you for registering on CIM Amplify!
+
+    Please click the following link to verify your email address:
+
+    <a href="${verificationLink}">${verificationLink}</a>
+
+    This link will expire in 24 hours.
+
+    Thank you,  
+    The CIM Amplify Team
+  `;
+
+  await this.mailService.sendEmailWithLogging(
+    user.email,
+    'buyer',  // or 'seller' depending on user type
+    'CIM Amplify Verification',
+    emailBody,
+  );
+}
+async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null }> {
+  const emailVerification = await this.emailVerificationModel.findOne({ token }).exec();
+
+  if (!emailVerification || emailVerification.isUsed || emailVerification.expiresAt < new Date()) {
+    return { verified: false, role: null };
+  }
+
+  // Mark token as used
+  emailVerification.isUsed = true;
+  await emailVerification.save();
+
+  const userId = emailVerification.userId;
+
+  const buyer = await this.buyerModel.findById(userId).exec();
+  if (buyer) {
+    buyer.isEmailVerified = true;
+    await buyer.save();
+    return { verified: true, role: 'buyer' };
+  }
+
+  const seller = await this.sellerModel.findById(userId).exec();
+  if (seller) {
+    seller.isEmailVerified = true;
+    await seller.save();
+    return { verified: true, role: 'seller' };
+  }
+
+  return { verified: false, role: null }; // user not found
 }
 
 }

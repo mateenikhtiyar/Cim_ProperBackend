@@ -49,9 +49,9 @@ export class Seller {
   @Prop({ required: true })
   companyName!: string;
 
-  @ApiProperty({ description: "Role of the user", default: "seller" })
-  @Prop({ default: "seller" })
-  role!: string;
+  @ApiProperty({ description: "Role of the user", default: "seller", enum: ["seller"] })
+  @Prop({ type: String, default: "seller", enum: ["seller"] })
+  role: "seller"
 
   @ApiProperty({ description: "Profile picture path", nullable: true })
   @Prop({ default: null })
@@ -80,6 +80,10 @@ export class Seller {
   @ApiProperty({ description: "Management future preferences" })
   @Prop({ required: false, default: "" })
   managementPreferences!: string;
+
+  @ApiProperty({ description: "Whether the email is verified", default: false })
+  @Prop({ default: false })
+  isEmailVerified: boolean
 
   // Add any additional fields needed
 

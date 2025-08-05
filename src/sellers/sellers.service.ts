@@ -1,10 +1,11 @@
-import { Injectable, Logger, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, ConflictException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { RegisterSellerDto } from './dto/create-seller.dto';
 import { UpdateSellerDto } from './dto/update-seller.dto';
 import { Seller, SellerDocument } from './schemas/seller.schema';
 import * as bcrypt from "bcrypt";
+import { AuthService } from '../auth/auth.service';
 
 @Injectable()
 export class SellersService {
@@ -12,6 +13,7 @@ export class SellersService {
 
   constructor(
     @InjectModel(Seller.name) private sellerModel: Model<SellerDocument>,
+    @Inject(forwardRef(() => AuthService)) private authService: AuthService
   ) {}
 
   async create(createSellerDto: RegisterSellerDto): Promise<Seller> {
@@ -27,7 +29,9 @@ export class SellersService {
         password: hashedPassword,
         role: 'seller',
       });
-      return await createdSeller.save();
+      const savedSeller = await createdSeller.save();
+      await this.authService.sendVerificationEmail(savedSeller);
+      return savedSeller;
     } catch (error) {
       this.logger.error(`Error creating seller: ${error.message}`, error.stack);
       throw error;
