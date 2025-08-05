@@ -3,13 +3,16 @@ import { Deal, DealDocumentType as DealDocument, DealStatus } from "./schemas/de
 import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
 import { Buyer } from '../buyers/schemas/buyer.schema';
+import { Seller } from '../sellers/schemas/seller.schema';
 import * as fs from "fs"
 import mongoose, { Model, Types } from 'mongoose';
 import { InjectModel } from "@nestjs/mongoose"
 import { expandCountryOrRegion } from '../common/geography-hierarchy';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsOptional } from 'class-validator';
+import { MailService } from '../mail/mail.service';
 import * as path from "path";
+
 
 interface DocumentInfo {
   filename: string
@@ -35,6 +38,8 @@ export class DealsService {
   constructor(
     @InjectModel(Deal.name) private dealModel: Model<DealDocument>,
     @InjectModel('Buyer') private buyerModel: Model<Buyer>,
+    @InjectModel('Seller') private sellerModel: Model<Seller>,
+    private mailService: MailService,
   ) { }
 
 
@@ -50,6 +55,26 @@ export class DealsService {
       }
       const createdDeal = new this.dealModel(dealData)
       const savedDeal = await createdDeal.save()
+
+      // Send email to seller
+      const seller = await this.sellerModel.findById(savedDeal.seller).exec();
+      if (seller) {
+        const subject = "Thank you for adding a new deal!";
+        const htmlBody = `
+          <p>Dear ${seller.fullName},</p>
+          <p>Thank you for adding a new deal titled "${savedDeal.title}" to CIM Amplify.</p>
+          <p>We will review your deal and get back to you shortly.</p>
+          <p>Best regards,</p>
+          <p>The CIM Amplify Team</p>
+        `;
+        await this.mailService.sendEmailWithLogging(
+          seller.email,
+          'seller',
+          subject,
+          htmlBody,
+                              (savedDeal._id as Types.ObjectId).toString(),
+        );
+      }
       return savedDeal
     } catch (error) {
       console.error("Error creating deal:", error)
@@ -591,29 +616,61 @@ export class DealsService {
 
 
 
+
+
   // -------------------------------------------------------------------------------------------------------------------------
-  async targetDealToBuyers(dealId: string, buyerIds: string[]): Promise<Deal> {
-    const deal = await this.dealModel.findById(dealId).exec() as DealDocument;
 
-    const existingTargets = deal.targetedBuyers.map((id) => id.toString())
-    const newTargets = buyerIds.filter((id) => !existingTargets.includes(id))
-
+  async targetDealToBuyers(dealId: string, buyerIds: string[]): Promise<DealDocument> {
+    const deal = (await this.dealModel.findById(dealId).exec()) as DealDocument;
+  
+    if (!deal) {
+      throw new Error(`Deal with ID ${dealId} not found`);
+    }
+  
+    const existingTargets = deal.targetedBuyers.map((id) => id.toString());
+    const newTargets = buyerIds.filter((id) => !existingTargets.includes(id));
+  
     if (newTargets.length > 0) {
-      deal.targetedBuyers = [...deal.targetedBuyers, ...newTargets]
-
-      newTargets.forEach((buyerId) => {
+      deal.targetedBuyers = [...deal.targetedBuyers, ...newTargets];
+  
+      for (const buyerId of newTargets) {
         deal.invitationStatus.set(buyerId, {
           invitedAt: new Date(),
           response: "pending",
-        })
-      })
-
-      deal.timeline.updatedAt = new Date()
-      await deal.save()
+        });
+  
+        // Send email to invited buyer
+        const buyer = await this.buyerModel.findById(buyerId).exec();
+        if (buyer) {
+          const dealIdStr =
+            deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
+  
+          const subject = "You have a new deal match!";
+          const htmlBody = `
+            <p>Dear ${buyer.fullName},</p>
+            <p>A new deal, "${deal.title}", has been matched to your criteria on CIM Amplify.</p>
+            <p>Click <a href="${process.env.FRONTEND_URL}/buyer/deals/${dealIdStr}">here</a> to view the deal.</p>
+            <p>Best regards,</p>
+            <p>The CIM Amplify Team</p>
+          `;
+  
+          await this.mailService.sendEmailWithLogging(
+            buyer.email,
+            'buyer',
+            subject,
+            htmlBody,
+            dealIdStr,
+          );
+        }
+      }
+  
+      deal.timeline.updatedAt = new Date();
+      await deal.save();
     }
-
-    return deal
+  
+    return deal;
   }
+  
 
   async updateDealStatus(dealId: string, buyerId: string, status: "pending" | "active" | "rejected"): Promise<any> {
     try {
@@ -721,6 +778,79 @@ export class DealsService {
       await tracking.save()
       dealDoc.timeline.updatedAt = new Date()
       await dealDoc.save() // Now calling save() on the document
+
+      // Send email notifications based on status
+      if (status === "active") {
+        // Buyer accepts deal: Send introduction email to seller and buyer
+        const seller = await this.sellerModel.findById(dealDoc.seller).exec();
+        const buyer = await this.buyerModel.findById(buyerId).exec();
+
+        if (seller && buyer) {
+          const sellerSubject = `Introduction: ${buyer.fullName} is interested in your deal "${dealDoc.title}"`;
+          const sellerHtmlBody = `
+            <p>Dear ${seller.fullName},</p>
+            <p>Good news! ${buyer.fullName} (${buyer.companyName}) has accepted your invitation and is interested in your deal "${dealDoc.title}".</p>
+            <p>You can now connect with them directly. Here is their contact information:</p>
+            <ul>
+              <li>Name: ${buyer.fullName}</li>
+              <li>Email: ${buyer.email}</li>
+              <li>Company: ${buyer.companyName}</li>
+            </ul>
+            <p>Best regards,</p>
+            <p>The CIM Amplify Team</p>
+          `;
+          await this.mailService.sendEmailWithLogging(
+            seller.email,
+            'seller',
+            sellerSubject,
+            sellerHtmlBody,
+            (dealDoc._id as Types.ObjectId).toString(),
+          );
+
+          const buyerSubject = `Introduction: Your interest in deal "${dealDoc.title}"`;
+          const buyerHtmlBody = `
+            <p>Dear ${buyer.fullName},</p>
+            <p>Thank you for showing interest in the deal "${dealDoc.title}".</p>
+            <p>The seller, ${seller.fullName} from ${seller.companyName}, has been notified of your interest. Here is their contact information:</p>
+            <ul>
+              <li>Name: ${seller.fullName}</li>
+              <li>Email: ${seller.email}</li>
+              <li>Company: ${seller.companyName}</li>
+            </ul>
+            <p>Best regards,</p>
+            <p>The CIM Amplify Team</p>
+          `;
+          await this.mailService.sendEmailWithLogging(
+            buyer.email,
+            'buyer',
+            buyerSubject,
+            buyerHtmlBody,
+            (dealDoc._id as Types.ObjectId).toString(),
+          );
+        }
+      } else if (status === "rejected") {
+        // Buyer rejects deal: Notify seller
+        const seller = await this.sellerModel.findById(dealDoc.seller).exec();
+        const buyer = await this.buyerModel.findById(buyerId).exec();
+
+        if (seller && buyer) {
+          const subject = `Buyer ${buyer.fullName} just passed on your deal "${dealDoc.title}"`;
+          const htmlBody = `
+            <p>Dear ${seller.fullName},</p>
+            <p>Please be informed that ${buyer.fullName} (${buyer.companyName}) has passed on your deal "${dealDoc.title}".</p>
+            <p>Notes from buyer: ${notes || 'No notes provided.'}</p>
+            <p>Best regards,</p>
+            <p>The CIM Amplify Team</p>
+          `;
+          await this.mailService.sendEmailWithLogging(
+            seller.email,
+            'seller',
+            subject,
+            htmlBody,
+            (dealDoc._id as Types.ObjectId).toString(),
+          );
+        }
+      }
 
       return { deal: dealDoc, tracking, message: `Deal status updated to ${status}` }
     } catch (error) {
@@ -1188,6 +1318,76 @@ export class DealsService {
     await tracking.save();
     const savedDeal = await dealDoc.save();
 
+    // Phase 4.1: When a deal goes off market (sold to CIM Amplify buyer)
+    if (winningBuyerId) {
+      const seller = await this.sellerModel.findById(userId).exec();
+      const winningBuyer = await this.buyerModel.findById(winningBuyerId).exec();
+
+      if (seller && winningBuyer) {
+        const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
+        // Email to Seller
+        const sellerSubject = `Congratulations! Your deal "${dealDoc.title}" has been successfully closed!`;
+        const sellerHtmlBody = `
+          <p>Dear ${seller.fullName},</p>
+          <p>We are thrilled to inform you that your deal "${dealDoc.title}" has been successfully closed with ${winningBuyer.companyName} through CIM Amplify.</p>
+          <p>Final Sale Price: ${finalSalePrice ? finalSalePrice.toLocaleString() : 'Not specified'}</p>
+          <p>Payment information will be shared with you shortly.</p>
+          <p>Thank you for choosing CIM Amplify!</p>
+          <p>Best regards,</p>
+          <p>The CIM Amplify Team</p>
+        `;
+        await this.mailService.sendEmailWithLogging(
+          seller.email,
+          'seller',
+          sellerSubject,
+          sellerHtmlBody,
+          dealIdStr,
+        );
+
+        // Email to Buyer
+        const buyerSubject = `Congratulations! You have successfully acquired the deal "${dealDoc.title}"!`;
+        const buyerHtmlBody = `
+          <p>Dear ${winningBuyer.fullName},</p>
+          <p>We are thrilled to congratulate you on successfully acquiring the deal "${dealDoc.title}" from ${seller.companyName} through CIM Amplify.</p>
+          <p>Final Sale Price: ${finalSalePrice ? finalSalePrice.toLocaleString() : 'Not specified'}</p>
+          <p>We wish you the best in your new venture!</p>
+          <p>Thank you for choosing CIM Amplify!</p>
+          <p>Best regards,</p>
+          <p>The CIM Amplify Team</p>
+        `;
+        await this.mailService.sendEmailWithLogging(
+          winningBuyer.email,
+          'buyer',
+          buyerSubject,
+          buyerHtmlBody,
+          dealIdStr,
+        );
+      }
+    } else {
+      // Phase 4.2: When a deal goes off market (not sold)
+      const seller = await this.sellerModel.findById(userId).exec();
+      if (seller) {
+        const subject = `Update on your deal "${dealDoc.title}"`;
+        const htmlBody = `
+          <p>Dear ${seller.fullName},</p>
+          <p>We regret to inform you that your deal "${dealDoc.title}" has been marked as off-market without a successful sale through CIM Amplify.</p>
+          <p>We understand this might be disappointing, but don't lose hope! Many factors can influence a deal's outcome.</p>
+          <p>We encourage you to consider adding new deals or updating your existing ones to increase your chances of a successful match.</p>
+          <p>Best regards,</p>
+          <p>The CIM Amplify Team</p>
+        `;
+        const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
+        await this.mailService.sendEmailWithLogging(
+          seller.email,
+          'seller',
+          subject,
+          htmlBody,
+          dealIdStr,
+        );
+        
+      }
+    }
+
     return savedDeal;
   }
 
@@ -1586,4 +1786,3 @@ export class DealsService {
     }).sort({ "timeline.updatedAt": -1 }).exec();
   }
 }
-

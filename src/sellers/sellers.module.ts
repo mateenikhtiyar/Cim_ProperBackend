@@ -7,6 +7,7 @@ import { ConfigModule } from "@nestjs/config"
 import { SharedModule } from "../shared.module"
 import { DealsService } from "../deals/deals.service"
 import * as fs from 'fs';
+import { MailModule } from "mail/mail.module";
 
 // Ensure upload directory exists
 const uploadDir = './uploads/profile-pictures';
@@ -19,6 +20,7 @@ if (!fs.existsSync(uploadDir)) {
     forwardRef(() => AuthModule),
     forwardRef(() => SharedModule),
     ConfigModule,
+    MailModule,
     MulterModule.register({
       dest: './uploads/profile-pictures',
     }),
