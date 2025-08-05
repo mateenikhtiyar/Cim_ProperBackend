@@ -1,18 +1,21 @@
-import { Injectable, ConflictException, NotFoundException } from "@nestjs/common"
+import { Injectable, ConflictException, NotFoundException, Inject, forwardRef } from "@nestjs/common"
 import { Model } from "mongoose"
 import * as bcrypt from "bcrypt"
 import { Buyer, BuyerDocument } from "./schemas/buyer.schema"
 import { CreateBuyerDto } from "./dto/create-buyer.dto"
 import { UpdateBuyerDto } from "./dto/update-buyer.dto"
 import { InjectModel } from "@nestjs/mongoose"
+import { AuthService } from "../auth/auth.service"
 
 @Injectable()
 export class BuyersService {
   // private buyerModel: Model<BuyerDocument>
 
   constructor(
-    @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>
-  ) {}
+    @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
+    @Inject(forwardRef(() => AuthService)) private authService: AuthService
+
+  ) { }
 
   async create(createBuyerDto: CreateBuyerDto): Promise<Buyer> {
     const { email, password } = createBuyerDto
@@ -29,7 +32,9 @@ export class BuyersService {
       password: hashedPassword,
     })
 
-    return newBuyer.save()
+    const savedBuyer = await newBuyer.save()
+    await this.authService.sendVerificationEmail(savedBuyer);
+    return savedBuyer
   }
 
   async findAll(): Promise<Buyer[]> {
