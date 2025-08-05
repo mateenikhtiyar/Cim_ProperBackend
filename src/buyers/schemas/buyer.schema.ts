@@ -21,9 +21,9 @@ export class Buyer {
   @Prop({ required: true })
   password: string
 
-  @ApiProperty({ description: "Role of the user", default: "buyer" })
-  @Prop({ default: "buyer" })
-  role: string
+  @ApiProperty({ description: "Role of the user", default: "buyer", enum: ["buyer"] })
+  @Prop({ type: String, default: "buyer", enum: ["buyer"] })
+  role: "buyer"
 
   @ApiProperty({ description: "Phone number of the buyer" })
   @Prop({ type: String, required: true })
@@ -56,6 +56,10 @@ export class Buyer {
   @ApiProperty({ description: "Token expiry timestamp", nullable: true })
   @Prop({ default: null })
   resetPasswordExpires: Date
+
+  @ApiProperty({ description: "Whether the email is verified", default: false })
+  @Prop({ default: false })
+  isEmailVerified: boolean
 
   // Ensure Mongoose methods are properly typed
   toObject?(): any

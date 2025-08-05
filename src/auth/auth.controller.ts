@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards, Request, Get, Patch, BadRequestException, ValidationPipe, UsePipes, HttpStatus, HttpCode } from "@nestjs/common"
+import { Body, Controller, Post, UseGuards, Request, Get, Patch, BadRequestException, ValidationPipe, UsePipes, HttpStatus, HttpCode, Res, Query } from "@nestjs/common"
 import { AuthService } from "./auth.service"
 import { LocalAuthGuard } from "./guards/local-auth.guard"
 import { JwtAuthGuard } from "./guards/jwt-auth.guard"
@@ -11,6 +11,9 @@ import { LoginAdminDto } from "./dto/login-admin.dto"
 import { LoginSellerDto } from "./dto/login-seller.dto"
 import { ForgotPasswordDto } from './dto/forgot-password.dto'
 import { ResetPasswordDto } from './dto/reset-password.dto'
+import { Response } from 'express';
+
+
 
 @ApiTags("auth")
 @Controller("auth")
@@ -116,8 +119,25 @@ export class AuthController {
   resetPasswordSeller(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPasswordSeller(dto)
   }
+
   
+    @Get('verify-email')
+    async verifyEmail(@Query('token') token: string, @Res() res: Response) {
+      try {
+        const { verified, role } = await this.authService.verifyEmailToken(token);
+        if (verified) {
+          // Redirect or send success message page
+          return res.status(HttpStatus.OK).json({ message: 'Email verified successfully. You can now login.', role });
+        } else {
+          return res.status(HttpStatus.BAD_REQUEST).send('Invalid or expired verification token.');
+        }
+      } catch (e) {
+        return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send('An error occurred.');
+      }
+    }
+
+    
+  }
 
 
 
-}

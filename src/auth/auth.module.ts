@@ -11,14 +11,27 @@ import { SellerGoogleStrategy } from "./strategies/seller-google.strategy"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { SharedModule } from "../shared.module"
 import { MailService } from "mail/mail.service"
+import { MongooseModule } from "@nestjs/mongoose"
+import { EmailVerification, EmailVerificationSchema } from './schemas/email-verification.schema';
+import { BuyersModule } from '../buyers/buyers.module';
+import { SellersModule } from '../sellers/sellers.module';
+import { MailModule } from '../mail/mail.module';
+import { AdminModule } from '../admin/admin.module';
 
 @Module({
   imports: [
-    forwardRef(() => SharedModule), // Handle circular dependency
+    MongooseModule.forFeature([
+      { name: EmailVerification.name, schema: EmailVerificationSchema },
+    ]),
+    forwardRef(() => BuyersModule),
+    forwardRef(() => SellersModule),
+    forwardRef(() => AdminModule),
+    MailModule,
+    SharedModule, // Handle circular dependency
     PassportModule,
     ConfigModule,
     JwtModule.registerAsync({
-      imports: [ConfigModule],
+      imports: [ConfigModule,MongooseModule.forFeature([{ name: EmailVerification.name, schema: EmailVerificationSchema }])],
       useFactory: async (configService: ConfigService) => {
         const secret = configService.get<string>("JWT_SECRET", "your-secret-key")
         Logger.log(`JWT Module initialized with secret: ${secret.substring(0, 3)}...`, "AuthModule")
@@ -30,15 +43,16 @@ import { MailService } from "mail/mail.service"
       inject: [ConfigService],
     }),
   ],
+  
   controllers: [AuthController],
   providers: [
     AuthService,
     LocalStrategy,
     JwtStrategy,
-    MailService,
     GoogleStrategy,
     SellerGoogleStrategy,
     RolesGuard,
+    
     {
       provide: "LOGGER",
       useFactory: () => {
