@@ -17,10 +17,14 @@ import { MailModule } from './mail/mail.module';
 
 import { CronModule } from './cron/cron.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import * as path from 'path';
 
 @Module({
   imports: [
-    ConfigModule.forRoot(),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: join(__dirname, '..', '.env'), // Point to CIM-new/backend/.env
+    }),
     MongooseModule.forRoot(process.env.MONGODB_URI || "mongodb://localhost/e-commerce"),
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, "..", "Uploads"),
