@@ -72,7 +72,8 @@ export class DealsService {
           'seller',
           subject,
           htmlBody,
-                              (savedDeal._id as Types.ObjectId).toString(),
+          [], // attachments
+          (savedDeal._id as Types.ObjectId).toString(), // relatedDealId
         );
       }
       return savedDeal
@@ -659,7 +660,8 @@ export class DealsService {
             'buyer',
             subject,
             htmlBody,
-            dealIdStr,
+            [], // attachments
+            dealIdStr, // relatedDealId
           );
         }
       }
@@ -804,7 +806,8 @@ export class DealsService {
             'seller',
             sellerSubject,
             sellerHtmlBody,
-            (dealDoc._id as Types.ObjectId).toString(),
+            [], // attachments
+            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
           );
 
           const buyerSubject = `Introduction: Your interest in deal "${dealDoc.title}"`;
@@ -825,7 +828,8 @@ export class DealsService {
             'buyer',
             buyerSubject,
             buyerHtmlBody,
-            (dealDoc._id as Types.ObjectId).toString(),
+            [], // attachments
+            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
           );
         }
       } else if (status === "rejected") {
@@ -847,7 +851,8 @@ export class DealsService {
             'seller',
             subject,
             htmlBody,
-            (dealDoc._id as Types.ObjectId).toString(),
+            [], // attachments
+            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
           );
         }
       }
@@ -1341,7 +1346,8 @@ export class DealsService {
           'seller',
           sellerSubject,
           sellerHtmlBody,
-          dealIdStr,
+          [], // attachments
+          dealIdStr, // relatedDealId
         );
 
         // Email to Buyer
@@ -1360,6 +1366,7 @@ export class DealsService {
           'buyer',
           buyerSubject,
           buyerHtmlBody,
+          [], // attachments
           dealIdStr,
         );
       }
@@ -1382,6 +1389,7 @@ export class DealsService {
           'seller',
           subject,
           htmlBody,
+          [], // attachments
           dealIdStr,
         );
         

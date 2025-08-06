@@ -7,6 +7,9 @@ import { Model, Types } from 'mongoose';
 import { Seller, SellerDocument } from '../sellers/schemas/seller.schema';
 import { Buyer, BuyerDocument } from '../buyers/schemas/buyer.schema';
 import { DealDocumentType } from '../deals/schemas/deal.schema';
+import { genericEmailTemplate } from '../mail/generic-email.template';
+import { join } from 'path';
+import { EmailVerification, EmailVerificationDocument } from '../auth/schemas/email-verification.schema';
 
 @Injectable()
 export class CronService {
@@ -17,6 +20,7 @@ export class CronService {
     private mailService: MailService,
     @InjectModel(Seller.name) private sellerModel: Model<SellerDocument>,
     @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
+    @InjectModel(EmailVerification.name) private emailVerificationModel: Model<EmailVerificationDocument>,
   ) {}
 
   @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
@@ -44,19 +48,26 @@ export class CronService {
       }
 
       const subject = 'Monthly Deal Activity Summary';
-      const htmlBody = `
-        <p>Dear ${seller.fullName},</p>
+      const emailContent = `
         <p>Here is a summary of your deal activity for the past month:</p>
         <ul>
           <li>Active Deals: ${activeDealsCount}</li>
           <li>Pending Deals: ${pendingDealsCount}</li>
           <li>Rejected Deals: ${rejectedDealsCount}</li>
         </ul>
-        <p>Thank you for being a part of CIM Amplify.</p>
-        <p>Best regards,</p>
-        <p>The CIM Amplify Team</p>
       `;
-      await this.mailService.sendEmailWithLogging(seller.email, 'seller', subject, htmlBody);
+
+      const emailBody = genericEmailTemplate(subject, seller.fullName, emailContent);
+
+      const attachments = [
+        {
+          filename: 'illustration.png',
+          path: join(__dirname, '..', 'assets', 'illustration.png'),
+          cid: 'illustration',
+        },
+      ];
+
+      await this.mailService.sendEmailWithLogging(seller.email, 'seller', subject, emailBody, attachments);
     }
   }
 
@@ -69,14 +80,22 @@ export class CronService {
       const activeDeals = await this.dealsService.getSellerActiveDeals(seller._id.toString());
       if (activeDeals.length === 0) {
         const subject = 'Time to add new deals to CIM Amplify!';
-        const htmlBody = `
-          <p>Dear ${seller.fullName},</p>
-          <p>We noticed you don't have any active deals on CIM Amplify at the moment.</p>
-          <p>Don't miss out on potential matches! Add new deals today to connect with interested buyers.</p>
-          <p>Best regards,</p>
-          <p>The CIM Amplify Team</p>
+        const emailContent = `
+          <p>We noticed you don’t have any active deals on CIM Amplify at the moment.</p>
+          <p>Don’t miss out on potential matches! Add new deals today to connect with interested buyers.</p>
         `;
-        await this.mailService.sendEmailWithLogging(seller.email, 'seller', subject, htmlBody);
+
+        const emailBody = genericEmailTemplate(subject, seller.fullName, emailContent);
+
+        const attachments = [
+          {
+            filename: 'illustration.png',
+            path: join(__dirname, '..', 'assets', 'illustration.png'),
+            cid: 'illustration',
+          },
+        ];
+
+        await this.mailService.sendEmailWithLogging(seller.email, 'seller', subject, emailBody, attachments);
       }
     }
   }
@@ -88,14 +107,32 @@ export class CronService {
 
     for (const buyer of buyers) {
       const subject = 'Update your target criteria on CIM Amplify!';
-      const htmlBody = `
-        <p>Dear ${buyer.fullName},</p>
+      const emailContent = `
         <p>It's been a while since you last updated your target criteria on CIM Amplify.</p>
         <p>Ensure you're getting the best deal matches by reviewing and updating your preferences.</p>
-        <p>Best regards,</p>
-        <p>The CIM Amplify Team</p>
       `;
-      await this.mailService.sendEmailWithLogging(buyer.email, 'buyer', subject, htmlBody);
+
+      const emailBody = genericEmailTemplate(subject, buyer.fullName, emailContent);
+
+      const attachments = [
+        {
+          filename: 'illustration.png',
+          path: join(__dirname, '..', 'assets', 'illustration.png'),
+          cid: 'illustration',
+        },
+      ];
+
+      await this.mailService.sendEmailWithLogging(buyer.email, 'buyer', subject, emailBody, attachments);
     }
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async cleanUpExpiredVerificationTokens() {
+    this.logger.log('Running cron job to clean up expired verification tokens');
+    const result = await this.emailVerificationModel.deleteMany({
+      expiresAt: { $lt: new Date() },
+      isUsed: false,
+    }).exec();
+    this.logger.log(`Cleaned up ${result.deletedCount} expired and unused verification tokens.`);
   }
 }

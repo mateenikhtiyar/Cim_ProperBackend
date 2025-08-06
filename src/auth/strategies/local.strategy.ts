@@ -18,7 +18,7 @@ export class LocalStrategy extends PassportStrategy(Strategy) {
     // Check user type for proper authentication
     const userType = req.body.userType || "buyer"
 
-    const user = await this.authService.validateUser(email, password, userType as "buyer" | "admin" | "seller")
+    const user = await this.authService.validateUser(email, password, userType as "buyer" | "seller" | "admin")
     if (!user) {
       throw new UnauthorizedException("Invalid credentials")
     }
