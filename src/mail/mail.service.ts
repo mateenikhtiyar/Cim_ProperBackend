@@ -1,11 +1,18 @@
 // src/mail/mail.service.ts
+// src/mail/mail.service.ts
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CommunicationLog, CommunicationLogDocument } from './schemas/communication-log.schema';
+import { join } from 'path';
 import * as nodemailer from 'nodemailer';
 import { genericEmailTemplate } from './generic-email.template';
-import { join } from 'path';
+
+export const ILLUSTRATION_ATTACHMENT = {
+  filename: 'illustration.png',
+  path: join(process.cwd(), 'assets', 'illustration.png'),
+  cid: 'illustration',
+};
 
 
 @Injectable()
@@ -78,15 +85,8 @@ export class MailService {
 
     const emailBody = genericEmailTemplate(subject, name, emailContent);
 
-    const attachments = [
-      {
-        filename: 'illustration.png',
-        path: join(process.cwd(), 'assets', 'illustration.png'),
-        cid: 'illustration',
-      },
-    ];
-
-    await this.sendEmailWithLogging(to, 'user', subject, emailBody, attachments);
+    await this.sendEmailWithLogging(to, 'user', subject, emailBody, [ILLUSTRATION_ATTACHMENT]);
   }
+  
   
 }

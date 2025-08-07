@@ -25,14 +25,12 @@ export class ResetPasswordDto {
   @IsString()
   token: string
 
-  @ApiProperty({ description: 'New password', minLength: 8 })
+  @ApiProperty({ description: 'New password'})
   @IsString()
-  @MinLength(6, { message: 'Password must be at least 6 characters long' })
   newPassword: string
 
-  @ApiProperty({ description: 'Confirm new password', minLength: 8 })
+  @ApiProperty({ description: 'Confirm new password' })
   @IsString()
-  @MinLength(8, { message: 'Confirm password must also be at least 8 characters' })
   @Validate(MatchPasswords)
   confirmPassword: string
 }

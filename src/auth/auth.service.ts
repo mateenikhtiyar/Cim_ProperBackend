@@ -41,6 +41,15 @@ export class AuthService {
     private readonly mailService: MailService
   ) { }
 
+  verifyToken(token: string): any {
+    try {
+      return this.jwtService.verify(token);
+    } catch (error) {
+      this.logger.error('Token verification failed', error.stack);
+      throw new UnauthorizedException('Invalid token');
+    }
+  }
+
   async validateUser(email: string, password: string, userType: "buyer" | "seller" | "admin" = "buyer"): Promise<any> {
     try {
       let user;
@@ -389,7 +398,7 @@ async sendVerificationEmail(user: User) {
     attachments,
   );
 }
-async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string }> {
+async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string; userId?: string }> {
   this.logger.debug(`Attempting to verify token: ${token}`);
   const emailVerification = await this.emailVerificationModel.findOne({ token }).exec();
 
@@ -441,11 +450,11 @@ async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string
     const payload = { email: user.email, sub: user._id.toString(), role };
     const accessToken = this.jwtService.sign(payload);
     this.logger.debug(`User ${user.email} successfully verified. Access token generated.`);
-    return { verified: true, role, accessToken };
+    return { verified: true, role, accessToken, userId: user._id.toString() };
   }
 
   this.logger.debug(`Verification failed: User not found for userId: ${userId}`);
-  return { verified: false, role: null }; // user not found
+  return { verified: false, role: null };
 }
 
   async resendVerificationEmail(email: string): Promise<string> {
