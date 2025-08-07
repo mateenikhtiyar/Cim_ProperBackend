@@ -1,9 +1,18 @@
 // src/mail/mail.service.ts
+// src/mail/mail.service.ts
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CommunicationLog, CommunicationLogDocument } from './schemas/communication-log.schema';
+import { join } from 'path';
 import * as nodemailer from 'nodemailer';
+import { genericEmailTemplate } from './generic-email.template';
+
+export const ILLUSTRATION_ATTACHMENT = {
+  filename: 'illustration.png',
+  path: join(process.cwd(), 'assets', 'illustration.png'),
+  cid: 'illustration',
+};
 
 
 @Injectable()
@@ -21,12 +30,13 @@ export class MailService {
     },
   });
 
-  async sendEmail(to: string, subject: string, htmlBody: string) {
+  async sendEmail(to: string, subject: string, htmlBody: string, attachments: any[] = []) {
     return this.transporter.sendMail({
-      from: `"CIM Amplify" <${process.env.EMAIL_USER}>`,
+      from: `"Deal Flow" <${process.env.EMAIL_USER}>`,
       to,
       subject,
       html: htmlBody,
+      attachments,
     });
   }
 
@@ -35,10 +45,11 @@ export class MailService {
     recipientType: string,
     subject: string,
     body: string,
+    attachments: any[] = [],
     relatedDealId?: string,
   ): Promise<void> {
     try {
-      await this.sendEmail(recipientEmail, subject, body);
+      await this.sendEmail(recipientEmail, subject, body, attachments);
 
       await this.communicationLogModel.create({
         recipientEmail,
@@ -64,15 +75,18 @@ export class MailService {
       throw err;
     }
   }
-  async sendResetPasswordEmail(to: string, resetLink: string): Promise<void> {
+  async sendResetPasswordEmail(to: string, name: string, resetLink: string): Promise<void> {
     const subject = 'Reset your password';
-    const html = `
+    const emailContent = `
       <p>Click the link below to reset your password:</p>
       <a href="${resetLink}" target="_blank">Reset Password</a>
       <p>This link will expire in 15 minutes.</p>
     `;
-  
-    await this.sendEmail(to, subject, html);
+
+    const emailBody = genericEmailTemplate(subject, name, emailContent);
+
+    await this.sendEmailWithLogging(to, 'user', subject, emailBody, [ILLUSTRATION_ATTACHMENT]);
   }
+  
   
 }

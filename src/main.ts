@@ -38,6 +38,9 @@ async function bootstrap() {
     app.useStaticAssets(join(__dirname, '..', 'uploads'), {
       prefix: '/uploads',
     });
+    app.useStaticAssets(join(__dirname, '..', 'assets'), {
+      prefix: '/assets',
+    });
     // Fix CORS configuration
     app.enableCors({
       origin: [frontendUrl],

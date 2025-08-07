@@ -6,6 +6,7 @@ import { MailModule } from '../mail/mail.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Seller, SellerSchema } from '../sellers/schemas/seller.schema';
 import { Buyer, BuyerSchema } from '../buyers/schemas/buyer.schema';
+import { EmailVerification, EmailVerificationSchema } from '../auth/schemas/email-verification.schema';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { Buyer, BuyerSchema } from '../buyers/schemas/buyer.schema';
     MongooseModule.forFeature([
       { name: Seller.name, schema: SellerSchema },
       { name: Buyer.name, schema: BuyerSchema },
+      { name: EmailVerification.name, schema: EmailVerificationSchema },
     ]),
   ],
   providers: [CronService],

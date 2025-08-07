@@ -121,19 +121,30 @@ export class AuthController {
   }
 
   
-    @Get('verify-email')
-    async verifyEmail(@Query('token') token: string, @Res() res: Response) {
-      try {
-        const { verified, role } = await this.authService.verifyEmailToken(token);
-        if (verified) {
-          // Redirect or send success message page
-          return res.status(HttpStatus.OK).json({ message: 'Email verified successfully. You can now login.', role });
-        } else {
-          return res.status(HttpStatus.BAD_REQUEST).send('Invalid or expired verification token.');
-        }
-      } catch (e) {
-        return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send('An error occurred.');
+  @Get('verify-email')
+  async verifyEmail(@Query('token') token: string, @Res() res: Response) {
+    try {
+      const { verified, role, accessToken, userId } = await this.authService.verifyEmailToken(token);
+      if (verified) {
+        const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-success?token=${accessToken}&role=${role}&userId=${userId}`;
+        return res.redirect(redirectUrl);
+      } else {
+        const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-failure`;
+        return res.redirect(redirectUrl);
       }
+    } catch (e) {
+      const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-failure`;
+      return res.redirect(redirectUrl);
+    }
+  }
+
+    @Post('resend-verification')
+    @ApiOperation({ summary: 'Resend email verification link' })
+    @ApiResponse({ status: 200, description: 'Verification email resent successfully' })
+    @ApiResponse({ status: 404, description: 'No account found with this email' })
+    @ApiResponse({ status: 400, description: 'Email is already verified' })
+    async resendVerification(@Body('email') email: string) {
+      return this.authService.resendVerificationEmail(email);
     }
 
     
