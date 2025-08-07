@@ -17,6 +17,9 @@ import { Seller } from '../sellers/schemas/seller.schema';
 import { v4 as uuidv4 } from 'uuid';
 import { EmailVerification, EmailVerificationDocument } from './schemas/email-verification.schema';
 import { User, User as UserType } from './interfaces/user.interface'; // create if missing
+import { genericEmailTemplate } from '../mail/generic-email.template';
+import { join } from 'path';
+
 
 
 @Injectable()
@@ -38,10 +41,19 @@ export class AuthService {
     private readonly mailService: MailService
   ) { }
 
-  async validateUser(email: string, password: string, userType: "buyer" | "admin" | "seller" = "buyer"): Promise<any> {
+  verifyToken(token: string): any {
+    try {
+      return this.jwtService.verify(token);
+    } catch (error) {
+      this.logger.error('Token verification failed', error.stack);
+      throw new UnauthorizedException('Invalid token');
+    }
+  }
+
+  async validateUser(email: string, password: string, userType: "buyer" | "seller" | "admin" = "buyer"): Promise<any> {
     try {
       let user;
-
+  
       if (userType === "admin") {
         user = await this.adminService.findByEmail(email);
       } else if (userType === "seller") {
@@ -49,9 +61,10 @@ export class AuthService {
       } else {
         user = await this.buyersService.findByEmail(email);
       }
-
+  
       if (user && (await bcrypt.compare(password, user.password))) {
-        if (!user.isEmailVerified) {
+        // Admin users don't have an isEmailVerified property
+        if (userType !== 'admin' && !user.isEmailVerified) {
           throw new UnauthorizedException('Please verify your email before logging in.');
         }
         const result = user.toObject ? user.toObject() : { ...user };
@@ -61,7 +74,7 @@ export class AuthService {
       return null;
     } catch (error) {
       this.logger.error(`Validation error: ${error.message}`, error.stack);
-      return null;
+      throw error;
     }
   }
 
@@ -253,7 +266,7 @@ async forgotPassword(email: string): Promise<string> {
   const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`
 
   // 7. Send email
-  await this.mailService.sendResetPasswordEmail(user.email, resetUrl)
+  await this.mailService.sendResetPasswordEmail(user.email, user.fullName, resetUrl)
 
   return 'Reset password email sent successfully'
 }
@@ -275,7 +288,7 @@ async forgotPasswordBuyer(email: string) {
   await buyer.save()
 
   const resetUrl = `${this.configService.get('FRONTEND_URL')}/buyer/reset-password?token=${resetToken}&role=buyer`
-  await this.mailService.sendResetPasswordEmail(buyer.email, resetUrl)
+  await this.mailService.sendResetPasswordEmail(buyer.email, buyer.fullName, resetUrl)
   return 'Reset password email sent successfully'
 }
 
@@ -313,7 +326,7 @@ async forgotPasswordSeller(email: string) {
   await seller.save()
 
   const resetUrl = `${this.configService.get('FRONTEND_URL')}/seller/reset-password?token=${resetToken}&role=seller`
-  await this.mailService.sendResetPasswordEmail(seller.email, resetUrl)
+  await this.mailService.sendResetPasswordEmail(seller.email, seller.fullName, resetUrl)
   return 'Reset password email sent successfully'
 }
 
@@ -352,58 +365,122 @@ async sendVerificationEmail(user: User) {
     expiresAt,
   });
 
-  const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+  const verificationLink = `${process.env.BACKEND_URL}/auth/verify-email?token=${token}`;
 
-  const emailBody = `
-    Hello ${user.fullName},
-
-    Thank you for registering on CIM Amplify!
-
-    Please click the following link to verify your email address:
-
-    <a href="${verificationLink}">${verificationLink}</a>
-
-    This link will expire in 24 hours.
-
-    Thank you,  
-    The CIM Amplify Team
+  const emailContent = `
+    <p>Thank you for registering with CIM Amplify! To complete your registration and activate your account, please verify your email address by clicking the link below:</p>
+    <table border="0" cellpadding="0" cellspacing="0" style="margin: 24px 0;">
+        <tr>
+            <td align="center" style="border-radius: 5px; background-color: #3aafa9;">
+                <a href="${verificationLink}" target="_blank" style="font-size: 16px; color: #ffffff; text-decoration: none; padding: 12px 25px; border-radius: 5px; display: inline-block;">Verify Your Email Address</a>
+            </td>
+        </tr>
+    </table>
+    <p>This link is valid for 24 hours. If you did not register for an account with CIM Amplify, please disregard this email.</p>
+    <p>We look forward to helping you with your deal-making needs.</p>
   `;
+
+  const emailBody = genericEmailTemplate('CIM Amplify Verification', user.fullName, emailContent);
+
+  const attachments = [
+    {
+      filename: 'illustration.png',
+      path: join(process.cwd(), 'assets', 'illustration.png'),
+      cid: 'illustration',
+    },
+  ];
 
   await this.mailService.sendEmailWithLogging(
     user.email,
     'buyer',  // or 'seller' depending on user type
     'CIM Amplify Verification',
     emailBody,
+    attachments,
   );
 }
-async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null }> {
+async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string; userId?: string }> {
+  this.logger.debug(`Attempting to verify token: ${token}`);
   const emailVerification = await this.emailVerificationModel.findOne({ token }).exec();
 
-  if (!emailVerification || emailVerification.isUsed || emailVerification.expiresAt < new Date()) {
+  if (!emailVerification) {
+    this.logger.debug(`Verification failed: Token not found for ${token}`);
+    return { verified: false, role: null };
+  }
+
+  this.logger.debug(`Found emailVerification: ${JSON.stringify(emailVerification)}`);
+
+  if (emailVerification.isUsed) {
+    this.logger.debug(`Verification failed: Token ${token} already used.`);
+    return { verified: false, role: null };
+  }
+
+  if (emailVerification.expiresAt < new Date()) {
+    this.logger.debug(`Verification failed: Token ${token} expired. Expires at: ${emailVerification.expiresAt}, Current time: ${new Date()}`);
     return { verified: false, role: null };
   }
 
   // Mark token as used
   emailVerification.isUsed = true;
   await emailVerification.save();
+  this.logger.debug(`Token ${token} marked as used.`);
 
   const userId = emailVerification.userId;
+  let user: any;
+  let role: string | null = null;
 
   const buyer = await this.buyerModel.findById(userId).exec();
   if (buyer) {
     buyer.isEmailVerified = true;
     await buyer.save();
-    return { verified: true, role: 'buyer' };
+    user = buyer;
+    role = 'buyer';
+    this.logger.debug(`Buyer ${user.email} verified.`);
   }
 
   const seller = await this.sellerModel.findById(userId).exec();
   if (seller) {
     seller.isEmailVerified = true;
     await seller.save();
-    return { verified: true, role: 'seller' };
+    user = seller;
+    role = 'seller';
+    this.logger.debug(`Seller ${user.email} verified.`);
   }
 
-  return { verified: false, role: null }; // user not found
+  if (user && role) {
+    const payload = { email: user.email, sub: user._id.toString(), role };
+    const accessToken = this.jwtService.sign(payload);
+    this.logger.debug(`User ${user.email} successfully verified. Access token generated.`);
+    return { verified: true, role, accessToken, userId: user._id.toString() };
+  }
+
+  this.logger.debug(`Verification failed: User not found for userId: ${userId}`);
+  return { verified: false, role: null };
 }
 
+  async resendVerificationEmail(email: string): Promise<string> {
+    const buyer = await this.buyerModel.findOne({ email }).exec();
+    const seller = await this.sellerModel.findOne({ email }).exec();
+
+    if (!buyer && !seller) {
+      throw new NotFoundException('No account found with this email.');
+    }
+
+    const user: any = buyer || seller;
+
+    if (user.isEmailVerified) {
+      throw new BadRequestException('Email is already verified.');
+    }
+
+    // Invalidate any existing tokens for this user
+    await this.emailVerificationModel.updateMany(
+      { userId: user._id, isUsed: false },
+      { $set: { isUsed: true } },
+    ).exec();
+
+    // Generate a new token and send email
+    await this.sendVerificationEmail(user);
+
+    return 'Verification email resent successfully.';
+  }
 }
+

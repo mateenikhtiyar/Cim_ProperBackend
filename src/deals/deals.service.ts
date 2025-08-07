@@ -5,13 +5,15 @@ import { UpdateDealDto } from "./dto/update-deal.dto"
 import { Buyer } from '../buyers/schemas/buyer.schema';
 import { Seller } from '../sellers/schemas/seller.schema';
 import * as fs from "fs"
+import * as path from 'path';
 import mongoose, { Model, Types } from 'mongoose';
 import { InjectModel } from "@nestjs/mongoose"
 import { expandCountryOrRegion } from '../common/geography-hierarchy';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsOptional } from 'class-validator';
 import { MailService } from '../mail/mail.service';
-import * as path from "path";
+import { genericEmailTemplate } from '../mail/generic-email.template';
+import { ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
 
 
 interface DocumentInfo {
@@ -59,20 +61,23 @@ export class DealsService {
       // Send email to seller
       const seller = await this.sellerModel.findById(savedDeal.seller).exec();
       if (seller) {
-        const subject = "Thank you for adding a new deal!";
-        const htmlBody = `
+        const subject = "Thank you for adding a new deal to CIM Amplify!";
+        const emailContent = `
           <p>Dear ${seller.fullName},</p>
-          <p>Thank you for adding a new deal titled "${savedDeal.title}" to CIM Amplify.</p>
-          <p>We will review your deal and get back to you shortly.</p>
-          <p>Best regards,</p>
-          <p>The CIM Amplify Team</p>
+          <p>We are truly excited to help you find a great buyer for your deal.</p>
+          <p>We will let you know via email when your selected buyers change from pending to viewed to pass. You can also check your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a> at any time to see buyer activity.</p>
+          <p>Please help us to keep the platform up to date by clicking the Off Market button when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
+          <p>Finally, If your deal did not fetch any buyers, we are always adding new buyers that may match in the future. To watch for new matches simply click Activity on the deal card and then click on the Invite Additional Buyers button.</p>
         `;
+        const emailBody = genericEmailTemplate('CIM Amplify', seller.fullName, emailContent);
+
         await this.mailService.sendEmailWithLogging(
           seller.email,
           'seller',
           subject,
-          htmlBody,
-                              (savedDeal._id as Types.ObjectId).toString(),
+          emailBody, // Use the formatted email body
+          [ILLUSTRATION_ATTACHMENT], // attachments
+          (savedDeal._id as Types.ObjectId).toString(), // relatedDealId
         );
       }
       return savedDeal
@@ -554,6 +559,7 @@ export class DealsService {
           averageDealSize: 1,
           totalMatchScore: 1,
           matchPercentage: { $round: ["$matchPercentage", 0] },
+          website: "$website",
           matchScores: {
             industryMatch: "$industryMatch",
             geographyMatch: "$geographyMatch",
@@ -645,21 +651,22 @@ export class DealsService {
           const dealIdStr =
             deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
   
-          const subject = "You have a new deal match!";
-          const htmlBody = `
-            <p>Dear ${buyer.fullName},</p>
-            <p>A new deal, "${deal.title}", has been matched to your criteria on CIM Amplify.</p>
-            <p>Click <a href="${process.env.FRONTEND_URL}/buyer/deals/${dealIdStr}">here</a> to view the deal.</p>
-            <p>Best regards,</p>
-            <p>The CIM Amplify Team</p>
-          `;
+          const subject = "YOU HAVE A NEW DEAL MATCH ON CIM AMPLIFY";
+          const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard(<a href="${process.env.FRONTEND_URL}/buyer/login">link to buyer login</a>) under Pending and click View CIM to activate.</p>
+            <p>Details: ${deal.companyDescription}</p>
+            <p>T12 Revenue: ${deal.financialDetails?.trailingRevenueAmount}</p>
+            <p>T12 EBITDA: ${deal.financialDetails?.trailingEBITDAAmount}</p>
+            <p>Please keep your dashboard up to date by moving Pending deals to either Pass or View CIM.</p>
+          `);
   
           await this.mailService.sendEmailWithLogging(
             buyer.email,
             'buyer',
             subject,
             htmlBody,
-            dealIdStr,
+            [ILLUSTRATION_ATTACHMENT], // attachments
+            dealIdStr, // relatedDealId
           );
         }
       }
@@ -784,48 +791,45 @@ export class DealsService {
         // Buyer accepts deal: Send introduction email to seller and buyer
         const seller = await this.sellerModel.findById(dealDoc.seller).exec();
         const buyer = await this.buyerModel.findById(buyerId).exec();
+        const companyProfile = await this.dealModel.db.model('CompanyProfile').findOne({ buyer: buyerId }).lean();
 
         if (seller && buyer) {
-          const sellerSubject = `Introduction: ${buyer.fullName} is interested in your deal "${dealDoc.title}"`;
-          const sellerHtmlBody = `
-            <p>Dear ${seller.fullName},</p>
-            <p>Good news! ${buyer.fullName} (${buyer.companyName}) has accepted your invitation and is interested in your deal "${dealDoc.title}".</p>
-            <p>You can now connect with them directly. Here is their contact information:</p>
-            <ul>
-              <li>Name: ${buyer.fullName}</li>
-              <li>Email: ${buyer.email}</li>
-              <li>Company: ${buyer.companyName}</li>
-            </ul>
-            <p>Best regards,</p>
-            <p>The CIM Amplify Team</p>
-          `;
+          const sellerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
+          const sellerHtmlBody = genericEmailTemplate(sellerSubject, seller.fullName.split(' ')[0], `
+            <p>${buyer.companyName} is interested in learning more about ${dealDoc.title}.  ${seller.fullName} please send your NDA to ${buyer.email} using this information:</p>
+            <p>
+              ${buyer.fullName}<br>
+              ${buyer.companyName}<br>
+              ${(companyProfile as any)?.phoneNumber || ''}<br>
+              ${(companyProfile as any)?.website || ''}
+            </p>
+          `);
           await this.mailService.sendEmailWithLogging(
             seller.email,
             'seller',
             sellerSubject,
             sellerHtmlBody,
-            (dealDoc._id as Types.ObjectId).toString(),
+            [ILLUSTRATION_ATTACHMENT], // attachments
+            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
           );
 
-          const buyerSubject = `Introduction: Your interest in deal "${dealDoc.title}"`;
-          const buyerHtmlBody = `
-            <p>Dear ${buyer.fullName},</p>
-            <p>Thank you for showing interest in the deal "${dealDoc.title}".</p>
-            <p>The seller, ${seller.fullName} from ${seller.companyName}, has been notified of your interest. Here is their contact information:</p>
-            <ul>
-              <li>Name: ${seller.fullName}</li>
-              <li>Email: ${seller.email}</li>
-              <li>Company: ${seller.companyName}</li>
-            </ul>
-            <p>Best regards,</p>
-            <p>The CIM Amplify Team</p>
-          `;
+          const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
+          const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+            <p>${buyer.companyName} is interested in learning more about ${dealDoc.title}.  ${seller.fullName} please send your NDA to ${buyer.email} using this information:</p>
+            <p>
+              ${buyer.fullName}<br>
+              ${buyer.companyName}<br>
+              ${(companyProfile as any)?.phoneNumber || ''}<br>
+              ${(companyProfile as any)?.website || ''}
+            </p>
+          `);
           await this.mailService.sendEmailWithLogging(
             buyer.email,
             'buyer',
             buyerSubject,
             buyerHtmlBody,
-            (dealDoc._id as Types.ObjectId).toString(),
+            [ILLUSTRATION_ATTACHMENT],
+            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
           );
         }
       } else if (status === "rejected") {
@@ -834,20 +838,17 @@ export class DealsService {
         const buyer = await this.buyerModel.findById(buyerId).exec();
 
         if (seller && buyer) {
-          const subject = `Buyer ${buyer.fullName} just passed on your deal "${dealDoc.title}"`;
-          const htmlBody = `
-            <p>Dear ${seller.fullName},</p>
-            <p>Please be informed that ${buyer.fullName} (${buyer.companyName}) has passed on your deal "${dealDoc.title}".</p>
-            <p>Notes from buyer: ${notes || 'No notes provided.'}</p>
-            <p>Best regards,</p>
-            <p>The CIM Amplify Team</p>
-          `;
+          const subject = `${buyer.fullName} just passed on ${dealDoc.title}`;
+          const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
+            <p>${buyer.fullName} just passed on ${dealDoc.title}. You can view all of your buyer activity on your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a>.</p>
+          `);
           await this.mailService.sendEmailWithLogging(
             seller.email,
             'seller',
             subject,
             htmlBody,
-            (dealDoc._id as Types.ObjectId).toString(),
+            [ILLUSTRATION_ATTACHMENT], // attachments
+            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
           );
         }
       }
@@ -1326,40 +1327,32 @@ export class DealsService {
       if (seller && winningBuyer) {
         const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
         // Email to Seller
-        const sellerSubject = `Congratulations! Your deal "${dealDoc.title}" has been successfully closed!`;
-        const sellerHtmlBody = `
-          <p>Dear ${seller.fullName},</p>
-          <p>We are thrilled to inform you that your deal "${dealDoc.title}" has been successfully closed with ${winningBuyer.companyName} through CIM Amplify.</p>
-          <p>Final Sale Price: ${finalSalePrice ? finalSalePrice.toLocaleString() : 'Not specified'}</p>
-          <p>Payment information will be shared with you shortly.</p>
-          <p>Thank you for choosing CIM Amplify!</p>
-          <p>Best regards,</p>
-          <p>The CIM Amplify Team</p>
-        `;
+        const sellerSubject = `Thank you for using CIM Amplify!`;
+        const sellerHtmlBody = genericEmailTemplate(sellerSubject, seller.fullName.split(' ')[0], `
+          <p>Thank you so much for posting your deal on CIM Amplify! We will be in touch to send you your reward once we have contacted the buyer. This process should not take long but feel free to contact us anytime for an update.</p>
+          <p>We hope that you will post with us again soon!</p>
+        `);
         await this.mailService.sendEmailWithLogging(
           seller.email,
           'seller',
           sellerSubject,
           sellerHtmlBody,
-          dealIdStr,
+          [], // attachments
+          dealIdStr, // relatedDealId
         );
 
         // Email to Buyer
-        const buyerSubject = `Congratulations! You have successfully acquired the deal "${dealDoc.title}"!`;
-        const buyerHtmlBody = `
-          <p>Dear ${winningBuyer.fullName},</p>
-          <p>We are thrilled to congratulate you on successfully acquiring the deal "${dealDoc.title}" from ${seller.companyName} through CIM Amplify.</p>
-          <p>Final Sale Price: ${finalSalePrice ? finalSalePrice.toLocaleString() : 'Not specified'}</p>
+        const buyerSubject = `Congratulations on your new acquisition!`;
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, winningBuyer.fullName.split(' ')[0], `
+          <p>Congratulations on your new acquisition! We are excited to have been a part of this journey with you.</p>
           <p>We wish you the best in your new venture!</p>
-          <p>Thank you for choosing CIM Amplify!</p>
-          <p>Best regards,</p>
-          <p>The CIM Amplify Team</p>
-        `;
+        `);
         await this.mailService.sendEmailWithLogging(
           winningBuyer.email,
           'buyer',
           buyerSubject,
           buyerHtmlBody,
+          [], // attachments
           dealIdStr,
         );
       }
@@ -1367,21 +1360,18 @@ export class DealsService {
       // Phase 4.2: When a deal goes off market (not sold)
       const seller = await this.sellerModel.findById(userId).exec();
       if (seller) {
-        const subject = `Update on your deal "${dealDoc.title}"`;
-        const htmlBody = `
-          <p>Dear ${seller.fullName},</p>
-          <p>We regret to inform you that your deal "${dealDoc.title}" has been marked as off-market without a successful sale through CIM Amplify.</p>
-          <p>We understand this might be disappointing, but don't lose hope! Many factors can influence a deal's outcome.</p>
-          <p>We encourage you to consider adding new deals or updating your existing ones to increase your chances of a successful match.</p>
-          <p>Best regards,</p>
-          <p>The CIM Amplify Team</p>
-        `;
+        const subject = `Thank you for using CIM Amplify!`;
+        const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
+          <p>Thank you so much for posting your deal on CIM Amplify!</p>
+          <p>We apologize deeply for not helping much with this deal! Fortunately we are adding new buyers daily and we hope that you will post with us again soon! Enjoy your gift card as our appreciation of your hard work.</p>
+        `);
         const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
         await this.mailService.sendEmailWithLogging(
           seller.email,
           'seller',
           subject,
           htmlBody,
+          [], // attachments
           dealIdStr,
         );
         
