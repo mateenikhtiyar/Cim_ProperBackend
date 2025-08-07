@@ -121,24 +121,22 @@ export class AuthController {
   }
 
   
-    @Get('verify-email')
-    async verifyEmail(@Query('token') token: string, @Res() res: Response) {
-      try {
-        const { verified, role, accessToken } = await this.authService.verifyEmailToken(token);
-        if (verified) {
-          // Construct the redirection URL with token and role
-          const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-success?token=${accessToken}&role=${role}`;
-          return res.redirect(redirectUrl);
-        } else {
-          // Redirect to a failure page or show an error
-          const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-failure`;
-          return res.redirect(redirectUrl);
-        }
-      } catch (e) {
+  @Get('verify-email')
+  async verifyEmail(@Query('token') token: string, @Res() res: Response) {
+    try {
+      const { verified, role, accessToken, userId } = await this.authService.verifyEmailToken(token);
+      if (verified) {
+        const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-success?token=${accessToken}&role=${role}&userId=${userId}`;
+        return res.redirect(redirectUrl);
+      } else {
         const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-failure`;
         return res.redirect(redirectUrl);
       }
+    } catch (e) {
+      const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-failure`;
+      return res.redirect(redirectUrl);
     }
+  }
 
     @Post('resend-verification')
     @ApiOperation({ summary: 'Resend email verification link' })
