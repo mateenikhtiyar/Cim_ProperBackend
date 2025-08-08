@@ -543,7 +543,7 @@ export class DealsService {
           }
         }
       },
-      { $match: { matchPercentage: { $gte: 100 } } },
+      { $match: { matchPercentage: { $gte: 90 } } },
       {
         $project: {
           _id: 1,
@@ -815,13 +815,14 @@ export class DealsService {
 
           const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
           const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
-            <p>${buyer.companyName} is interested in learning more about ${dealDoc.title}.  ${seller.fullName} please send your NDA to ${buyer.email} using this information:</p>
+            <p>Thank you for accepting an introduction to <strong>${dealDoc.title}</strong>. We have notified <strong>${seller.fullName}</strong> at <strong>${seller.companyName}</strong>. They will follow up with their NDA and the next steps.</p>
             <p>
-              ${buyer.fullName}<br>
-              ${buyer.companyName}<br>
-              ${(companyProfile as any)?.phoneNumber || ''}<br>
-              ${(companyProfile as any)?.website || ''}
+              <strong>Seller contact</strong><br>
+              ${seller.fullName}<br>
+              ${seller.companyName}<br>
+              ${seller.email}
             </p>
+            <p>If you don’t hear back within 2 business days, reply to this email and our team will assist. You can also access this deal from your <a href="${process.env.FRONTEND_URL}/buyer/login">buyer dashboard</a>.</p>
           `);
           await this.mailService.sendEmailWithLogging(
             buyer.email,
@@ -1337,7 +1338,7 @@ export class DealsService {
           'seller',
           sellerSubject,
           sellerHtmlBody,
-          [], // attachments
+          [ILLUSTRATION_ATTACHMENT], // attachments
           dealIdStr, // relatedDealId
         );
 
@@ -1352,7 +1353,7 @@ export class DealsService {
           'buyer',
           buyerSubject,
           buyerHtmlBody,
-          [], // attachments
+          [ILLUSTRATION_ATTACHMENT], // attachments
           dealIdStr,
         );
       }
@@ -1371,7 +1372,7 @@ export class DealsService {
           'seller',
           subject,
           htmlBody,
-          [], // attachments
+          [ILLUSTRATION_ATTACHMENT], // attachments
           dealIdStr,
         );
         

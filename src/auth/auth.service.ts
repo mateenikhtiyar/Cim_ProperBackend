@@ -355,8 +355,11 @@ async resetPasswordSeller(dto: ResetPasswordDto) {
 
 
 async sendVerificationEmail(user: User) {
+  this.logger.debug(`Preparing to send verification email for user: ${user.email}`);
   const token = uuidv4();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+  this.logger.debug(`Generated token: ${token}, expiresAt: ${expiresAt}`);
 
   await this.emailVerificationModel.create({
     userId: user._id,
@@ -364,8 +367,10 @@ async sendVerificationEmail(user: User) {
     isUsed: false,
     expiresAt,
   });
+  this.logger.debug(`Saved email verification record for user: ${user._id}`);
 
   const verificationLink = `${process.env.BACKEND_URL}/auth/verify-email?token=${token}`;
+  this.logger.debug(`Verification link: ${verificationLink}`);
 
   const emailContent = `
     <p>Thank you for registering with CIM Amplify! To complete your registration and activate your account, please verify your email address by clicking the link below:</p>
@@ -377,7 +382,7 @@ async sendVerificationEmail(user: User) {
         </tr>
     </table>
     <p>This link is valid for 24 hours. If you did not register for an account with CIM Amplify, please disregard this email.</p>
-    <p>We look forward to helping you with your deal-making needs.</p>
+    <p>We look forward to helping you with your deal-making.</p>
   `;
 
   const emailBody = genericEmailTemplate('CIM Amplify Verification', user.fullName, emailContent);
@@ -397,8 +402,9 @@ async sendVerificationEmail(user: User) {
     emailBody,
     attachments,
   );
+  this.logger.debug(`Called mailService.sendEmailWithLogging for ${user.email}`);
 }
-async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string; userId?: string }> {
+async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string; userId?: string; fullName?: string }> {
   this.logger.debug(`Attempting to verify token: ${token}`);
   const emailVerification = await this.emailVerificationModel.findOne({ token }).exec();
 
@@ -450,7 +456,8 @@ async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string
     const payload = { email: user.email, sub: user._id.toString(), role };
     const accessToken = this.jwtService.sign(payload);
     this.logger.debug(`User ${user.email} successfully verified. Access token generated.`);
-    return { verified: true, role, accessToken, userId: user._id.toString() };
+    this.logger.debug(`User object before returning: ${JSON.stringify(user)}`);
+    return { verified: true, role, accessToken, userId: user._id.toString(), fullName: user.fullName };
   }
 
   this.logger.debug(`Verification failed: User not found for userId: ${userId}`);
@@ -458,27 +465,33 @@ async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string
 }
 
   async resendVerificationEmail(email: string): Promise<string> {
+    this.logger.debug(`Attempting to resend verification email for: ${email}`);
     const buyer = await this.buyerModel.findOne({ email }).exec();
     const seller = await this.sellerModel.findOne({ email }).exec();
 
     if (!buyer && !seller) {
+      this.logger.warn(`No account found for email: ${email}`);
       throw new NotFoundException('No account found with this email.');
     }
 
     const user: any = buyer || seller;
+    this.logger.debug(`Found user: ${user.email}, isEmailVerified: ${user.isEmailVerified}`);
 
     if (user.isEmailVerified) {
+      this.logger.warn(`Email ${user.email} is already verified.`);
       throw new BadRequestException('Email is already verified.');
     }
 
     // Invalidate any existing tokens for this user
-    await this.emailVerificationModel.updateMany(
+    const updateResult = await this.emailVerificationModel.updateMany(
       { userId: user._id, isUsed: false },
       { $set: { isUsed: true } },
     ).exec();
+    this.logger.debug(`Invalidated ${updateResult.modifiedCount} old verification tokens for user ${user._id}`);
 
     // Generate a new token and send email
     await this.sendVerificationEmail(user);
+    this.logger.debug(`New verification email triggered for ${user.email}`);
 
     return 'Verification email resent successfully.';
   }
