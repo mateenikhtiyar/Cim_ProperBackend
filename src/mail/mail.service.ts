@@ -31,13 +31,18 @@ export class MailService {
   });
 
   async sendEmail(to: string, subject: string, htmlBody: string, attachments: any[] = []) {
-    return this.transporter.sendMail({
-      from: `"Deal Flow" <${process.env.EMAIL_USER}>`,
-      to,
-      subject,
-      html: htmlBody,
-      attachments,
-    });
+    try {
+      return await this.transporter.sendMail({
+        from: `"Deal Flow" <${process.env.EMAIL_USER}>`,
+        to,
+        subject,
+        html: htmlBody,
+        attachments,
+      });
+    } catch (error) {
+      console.error("Error sending email:", error);
+      throw error;
+    }
   }
 
   async sendEmailWithLogging(
