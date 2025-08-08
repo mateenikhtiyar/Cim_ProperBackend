@@ -124,9 +124,9 @@ export class AuthController {
   @Get('verify-email')
   async verifyEmail(@Query('token') token: string, @Res() res: Response) {
     try {
-      const { verified, role, accessToken, userId } = await this.authService.verifyEmailToken(token);
+      const { verified, role, accessToken, userId, fullName } = await this.authService.verifyEmailToken(token);
       if (verified) {
-        const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-success?token=${accessToken}&role=${role}&userId=${userId}`;
+        const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-success?token=${accessToken}&role=${role}&userId=${userId}&fullName=${encodeURIComponent(fullName || '')}`;
         return res.redirect(redirectUrl);
       } else {
         const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-failure`;
