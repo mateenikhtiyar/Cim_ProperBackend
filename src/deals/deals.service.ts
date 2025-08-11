@@ -652,12 +652,14 @@ export class DealsService {
             deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
   
           const subject = "YOU HAVE A NEW DEAL MATCH ON CIM AMPLIFY";
+          const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingRevenueAmount || 0);
+          const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
           const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard(<a href="${process.env.FRONTEND_URL}/buyer/login">link to buyer login</a>) under Pending and click View CIM to activate.</p>
+            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify (<a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a>) under Pending and click Move to Active button to activate.</p>
             <p>Details: ${deal.companyDescription}</p>
-            <p>T12 Revenue: ${deal.financialDetails?.trailingRevenueAmount}</p>
-            <p>T12 EBITDA: ${deal.financialDetails?.trailingEBITDAAmount}</p>
-            <p>Please keep your dashboard up to date by moving Pending deals to either Pass or View CIM.</p>
+            <p>T12 Revenue: ${trailingRevenueAmount}</p>
+            <p>T12 EBITDA: ${trailingEBITDAAmount}</p>
+            <p>Please keep your dashboard up to date by moving Pending deals to either Pass or Move to Active.</p>
           `);
   
           await this.mailService.sendEmailWithLogging(
@@ -796,13 +798,15 @@ export class DealsService {
         if (seller && buyer) {
           const sellerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
           const sellerHtmlBody = genericEmailTemplate(sellerSubject, seller.fullName.split(' ')[0], `
-            <p>${buyer.companyName} is interested in learning more about ${dealDoc.title}.  ${seller.fullName} please send your NDA to ${buyer.email} using this information:</p>
+            <p>${buyer.fullName} at ${buyer.companyName} is interested in learning more about ${dealDoc.title}. Please send your NDA to ${buyer.email}.</p>
+            <p>Here are the buyer's details:</p>
             <p>
               ${buyer.fullName}<br>
               ${buyer.companyName}<br>
               ${(companyProfile as any)?.phoneNumber || ''}<br>
               ${(companyProfile as any)?.website || ''}
             </p>
+            <p>Thank you!</p>
           `);
           await this.mailService.sendEmailWithLogging(
             seller.email,
@@ -839,9 +843,9 @@ export class DealsService {
         const buyer = await this.buyerModel.findById(buyerId).exec();
 
         if (seller && buyer) {
-          const subject = `${buyer.fullName} just passed on ${dealDoc.title}`;
+          const subject = `${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}`;
           const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
-            <p>${buyer.fullName} just passed on ${dealDoc.title}. You can view all of your buyer activity on your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a>.</p>
+            <p>${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}. You can view all of your buyer activity on your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a>.</p>
           `);
           await this.mailService.sendEmailWithLogging(
             seller.email,
@@ -862,36 +866,36 @@ export class DealsService {
 
   // Replace the existing getBuyerDeals method with this improved version
   async getBuyerDeals(buyerId: string, status?: "pending" | "active" | "rejected" | "completed"): Promise<Deal[]> {
+    const queryOptions = {
+      sort: { "timeline.updatedAt": -1 },
+      populate: { path: 'seller', select: 'fullName companyName' },
+    };
+  
     if (status === "active") {
-      // Only deals where invitationStatus[buyerId].response === 'accepted'
       return this.dealModel.find({
         [`invitationStatus.${buyerId}.response`]: "accepted",
         status: { $ne: DealStatus.COMPLETED },
-      }).sort({ "timeline.updatedAt": -1 }).exec();
+      }, null, queryOptions).exec();
     } else if (status === "rejected") {
-      // Only deals where invitationStatus[buyerId].response === 'rejected'
       return this.dealModel.find({
         [`invitationStatus.${buyerId}.response`]: "rejected",
         status: { $ne: DealStatus.COMPLETED },
-      }).sort({ "timeline.updatedAt": -1 }).exec();
+      }, null, queryOptions).exec();
     } else if (status === "pending") {
-      // Only deals where invitationStatus[buyerId].response === 'pending'
       return this.dealModel.find({
         [`invitationStatus.${buyerId}.response`]: "pending",
         status: { $ne: DealStatus.COMPLETED },
-      }).sort({ "timeline.updatedAt": -1 }).exec();
+      }, null, queryOptions).exec();
     } else if (status === "completed") {
-      // Only deals where invitationStatus[buyerId].response === 'accepted' and deal is completed
       return this.dealModel.find({
         [`invitationStatus.${buyerId}.response`]: "accepted",
         status: DealStatus.COMPLETED,
-      }).sort({ "timeline.completedAt": -1 }).exec();
+      }, null, { ...queryOptions, sort: { "timeline.completedAt": -1 } }).exec();
     } else {
-      // Default: all deals targeted to buyer (excluding completed)
       return this.dealModel.find({
         targetedBuyers: buyerId,
         status: { $ne: DealStatus.COMPLETED },
-      }).sort({ "timeline.updatedAt": -1 }).exec();
+      }, null, queryOptions).exec();
     }
   }
 
