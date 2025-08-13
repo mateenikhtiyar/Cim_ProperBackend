@@ -66,8 +66,8 @@ export class DealsService {
           <p>Dear ${seller.fullName},</p>
           <p>We are truly excited to help you find a great buyer for your deal.</p>
           <p>We will let you know via email when your selected buyers change from pending to viewed to pass. You can also check your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a> at any time to see buyer activity.</p>
-          <p>Please help us to keep the platform up to date by clicking the Off Market button when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
-          <p>Finally, If your deal did not fetch any buyers, we are always adding new buyers that may match in the future. To watch for new matches simply click Activity on the deal card and then click on the Invite Additional Buyers button.</p>
+          <p>Please help us to keep the platform up to date by clicking the <b>Off Market button</b> when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
+          <p>Finally, If your deal did not fetch any buyers, we are always adding new buyers that may match in the future. To watch for new matches simply click Activity on the deal card and then click on the I<b>Invite More Buyers</b> button.</p>
         `;
         const emailBody = genericEmailTemplate('CIM Amplify', seller.fullName, emailContent);
 
@@ -655,11 +655,12 @@ export class DealsService {
           const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingRevenueAmount || 0);
           const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
           const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+            CIM Amplify  deals are often exclusive first look for CIM Amplify Members only, so head to your CIM Amplify (<a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a>) under Pending and click Move to Active button to activate.
+            <b><p>Details: ${deal.companyDescription}</p></b>
+            <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
+            <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
             <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify (<a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a>) under Pending and click Move to Active button to activate.</p>
-            <p>Details: ${deal.companyDescription}</p>
-            <p>T12 Revenue: ${trailingRevenueAmount}</p>
-            <p>T12 EBITDA: ${trailingEBITDAAmount}</p>
-            <p>Please keep your dashboard up to date by moving Pending deals to either Pass or Move to Active.</p>
+            <p>Please finally keep your dashboard up to date by moving Pending deals to either <b>Pass</b> or <b>Move to Active<b/>.</p>
           `);
   
           await this.mailService.sendEmailWithLogging(
@@ -803,7 +804,7 @@ export class DealsService {
             <p>
               ${buyer.fullName}<br>
               ${buyer.companyName}<br>
-              ${(companyProfile as any)?.phoneNumber || ''}<br>
+              ${buyer.phone}<br>
               ${(companyProfile as any)?.website || ''}
             </p>
             <p>Thank you!</p>
@@ -825,6 +826,7 @@ export class DealsService {
               ${seller.fullName}<br>
               ${seller.companyName}<br>
               ${seller.email}
+              ${seller.website}
             </p>
             <p>If you don’t hear back within 2 business days, reply to this email and our team will assist. You can also access this deal from your <a href="${process.env.FRONTEND_URL}/buyer/login">buyer dashboard</a>.</p>
           `);
