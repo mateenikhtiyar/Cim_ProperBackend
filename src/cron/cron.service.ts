@@ -42,8 +42,8 @@ export class CronService {
         const subject = `Update on ${deal.title} from CIM Amplify`;
         const emailContent = `
           <p>You have ${summary.summary.totalActive} Active, ${summary.summary.totalPending} Pending and ${summary.summary.totalRejected} Passed buyers on <a href="${process.env.FRONTEND_URL}/seller/login">CIM Amplify</a>.</p>
-          <p>We are always adding new buyers that may be a match. To watch for new matches simply click Activity on the deal card and then click on the Invite Additional Buyers button.</p>
-          <p>Please help us to keep the platform up to date by clicking the Off Market button when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
+          <p>We are always adding new buyers that may be a match. To watch for new matches simply click Activity on the deal card and then click on the <b>Invite More Buyers</b> button.</p>
+          <p>Please help us to keep the platform up to date by clicking the <b>Off Market button</b> when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
         `;
 
         const emailBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], emailContent);
@@ -85,7 +85,7 @@ export class CronService {
       if (pendingDeals.length > 0) {
         const subject = 'You Have at Least One Deal Pending on CIM Amplify';
         const emailContent = `
-          <p>Please keep your <a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a> up to date by moving Pending deals to either Pass or View CIM.</p>
+          <p>Please keep your <a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a> up to date by moving Pending deals to either <b>Pass</b> or <b>Move to Active<b/>.</p>
         `;
 
         const emailBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
