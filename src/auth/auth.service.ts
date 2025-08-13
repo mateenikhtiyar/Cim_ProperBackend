@@ -496,4 +496,3 @@ async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string
     return 'Verification email resent successfully.';
   }
 }
-
