@@ -6,6 +6,9 @@ import { CreateBuyerDto } from "./dto/create-buyer.dto"
 import { UpdateBuyerDto } from "./dto/update-buyer.dto"
 import { InjectModel } from "@nestjs/mongoose"
 import { AuthService } from "../auth/auth.service"
+import { MailService } from "../mail/mail.service"
+import { genericEmailTemplate } from "../mail/generic-email.template"
+import { CompanyProfile } from "../company-profile/schemas/company-profile.schema"
 
 @Injectable()
 export class BuyersService {
@@ -13,8 +16,9 @@ export class BuyersService {
 
   constructor(
     @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
-    @Inject(forwardRef(() => AuthService)) private authService: AuthService
-
+    @InjectModel(CompanyProfile.name) private companyProfileModel: Model<CompanyProfile>,
+    @Inject(forwardRef(() => AuthService)) private authService: AuthService,
+    private mailService: MailService
   ) { }
 
   async create(createBuyerDto: CreateBuyerDto): Promise<Buyer> {
@@ -34,6 +38,26 @@ export class BuyersService {
 
     const savedBuyer = await newBuyer.save()
     await this.authService.sendVerificationEmail(savedBuyer);
+
+    // Send email to project owner
+    const companyProfile = await this.companyProfileModel.findById(savedBuyer.companyProfileId).exec();
+    const ownerSubject = `New Buyer (${savedBuyer.companyName})`;
+    const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
+      <p>Company Name: ${savedBuyer.companyName}</p>
+      <p>Website: ${companyProfile?.website}</p>
+      <p>Main Contact: ${savedBuyer.fullName}</p>
+      <p>Main Contact Email: ${savedBuyer.email}</p>
+      <p>Main Contact Phone: ${savedBuyer.phone}</p>
+    `);
+    await this.mailService.sendEmailWithLogging(
+      'johnm@cimamplify.com',
+      'admin',
+      ownerSubject,
+      ownerHtmlBody,
+      [],
+      undefined,
+    );
+
     return savedBuyer
   }
 
@@ -119,6 +143,24 @@ export class BuyersService {
       })
 
       buyer = await newBuyer.save()
+      // Send email to project owner
+      const companyProfile = await this.companyProfileModel.findById(buyer.companyProfileId).exec();
+      const ownerSubject = `New Buyer (${buyer.companyName})`;
+      const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
+        <p>Company Name: ${buyer.companyName}</p>
+        <p>Website: ${companyProfile?.website}</p>
+        <p>Main Contact: ${buyer.fullName}</p>
+        <p>Main Contact Email: ${buyer.email}</p>
+        <p>Main Contact Phone: ${buyer.phone}</p>
+      `);
+      await this.mailService.sendEmailWithLogging(
+        'johnm@cimamplify.com',
+        'admin',
+        ownerSubject,
+        ownerHtmlBody,
+        [],
+        undefined,
+      );
     }
 
     return { buyer, isNewUser }

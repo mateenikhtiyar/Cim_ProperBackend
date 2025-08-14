@@ -67,7 +67,7 @@ export class DealsService {
           <p>We are truly excited to help you find a great buyer for your deal.</p>
           <p>We will let you know via email when your selected buyers change from pending to viewed to pass. You can also check your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a> at any time to see buyer activity.</p>
           <p>Please help us to keep the platform up to date by clicking the <b>Off Market button</b> when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
-          <p>Finally, If your deal did not fetch any buyers, we are always adding new buyers that may match in the future. To watch for new matches simply click Activity on the deal card and then click on the I<b>Invite More Buyers</b> button.</p>
+          <p>Finally, If your deal did not fetch any buyers, we are always adding new buyers that may match in the future. To watch for new matches simply click Activity on the deal card and then click on the <b>Invite More Buyers</b> button.</p>
         `;
         const emailBody = genericEmailTemplate('CIM Amplify', seller.fullName, emailContent);
 
@@ -80,6 +80,23 @@ export class DealsService {
           (savedDeal._id as Types.ObjectId).toString(), // relatedDealId
         );
       }
+
+      // Send email to project owner
+      const ownerSubject = `New Deal (${savedDeal.title})`;
+      const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
+        <p>Description: ${savedDeal.companyDescription}</p>
+        <p>T12 Revenue: ${savedDeal.financialDetails?.trailingRevenueAmount}</p>
+        <p>T12 Ebitda: ${savedDeal.financialDetails?.trailingEBITDAAmount}</p>
+      `);
+      await this.mailService.sendEmailWithLogging(
+        'johnm@cimamplify.com',
+        'admin',
+        ownerSubject,
+        ownerHtmlBody,
+        [],
+        (savedDeal._id as Types.ObjectId).toString(),
+      );
+      
       return savedDeal
     } catch (error) {
       console.error("Error creating deal:", error)
@@ -1349,17 +1366,37 @@ export class DealsService {
         );
 
         // Email to Buyer
-        const buyerSubject = `Congratulations on your new acquisition!`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, winningBuyer.fullName.split(' ')[0], `
-          <p>Congratulations on your new acquisition! We are excited to have been a part of this journey with you.</p>
-          <p>We wish you the best in your new venture!</p>
+        // const buyerSubject = `Congratulations on your new acquisition!`;
+        // const buyerHtmlBody = genericEmailTemplate(buyerSubject, winningBuyer.fullName.split(' ')[0], `
+        //   <p>Congratulations on your new acquisition! We are excited to have been a part of this journey with you.</p>
+        //   <p>We wish you the best in your new venture!</p>
+        // `);
+        // await this.mailService.sendEmailWithLogging(
+        //   winningBuyer.email,
+        //   'buyer',
+        //   buyerSubject,
+        //   buyerHtmlBody,
+        //   [ILLUSTRATION_ATTACHMENT], // attachments
+        //   dealIdStr,
+        // );
+
+        // Send email to project owner
+        const ownerSubject = `Deal Complete ${dealDoc.title}`;
+        const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
+          <p>Date Completed: ${new Date().toLocaleDateString()}</p>
+          <p>Transaction value: ${finalSalePrice}</p>
+          <p>Seller Name: ${seller.fullName}</p>
+          <p>Seller Company: ${seller.companyName}</p>
+          <p>Buyer Name: ${winningBuyer.fullName}</p>
+          <p>Buyer Company: ${winningBuyer.companyName}</p>
+          <p>Buyer Email: ${winningBuyer.email}</p>
         `);
         await this.mailService.sendEmailWithLogging(
-          winningBuyer.email,
-          'buyer',
-          buyerSubject,
-          buyerHtmlBody,
-          [ILLUSTRATION_ATTACHMENT], // attachments
+          'johnm@cimamplify.com',
+          'admin',
+          ownerSubject,
+          ownerHtmlBody,
+          [],
           dealIdStr,
         );
       }
