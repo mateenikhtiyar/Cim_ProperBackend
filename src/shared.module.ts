@@ -10,6 +10,7 @@ import { CompanyProfile, CompanyProfileSchema } from './company-profile/schemas/
 import { Deal, DealSchema } from './deals/schemas/deal.schema';
 import { DealTracking, DealTrackingSchema } from './deal-tracking/schemas/deal-tracking.schema';
 import { AuthModule } from './auth/auth.module';
+import { MailModule } from './mail/mail.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { AuthModule } from './auth/auth.module';
       { name: DealTracking.name, schema: DealTrackingSchema },
     ]),
     forwardRef(() => AuthModule),
+    MailModule,
   ],
   providers: [
     BuyersService,
