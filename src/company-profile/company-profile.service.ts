@@ -61,7 +61,7 @@ export class CompanyProfileService {
   
 
   async findOne(id: string): Promise<CompanyProfile> {
-    const companyProfile = await this.companyProfileModel.findById(id).exec()
+    const companyProfile = await this.companyProfileModel.findById(id).populate('buyer').exec()
     if (!companyProfile) {
       throw new NotFoundException("Company profile not found")
     }
