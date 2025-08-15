@@ -33,6 +33,10 @@ export class Buyer {
   @Prop({ type: String, required: true })
   companyName: string
 
+  @ApiProperty({ example: "https://acme.com", description: "Company website of the buyer" })
+  @Prop({ required: false })
+  website?: string
+
   @ApiProperty({ description: "Reference to the company profile", nullable: true })
   @Prop({ type: Types.ObjectId, ref: "CompanyProfile", default: null })
   companyProfileId: Types.ObjectId

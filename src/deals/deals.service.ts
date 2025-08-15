@@ -83,17 +83,19 @@ export class DealsService {
 
       // Send email to project owner
       const ownerSubject = `New Deal (${savedDeal.title})`;
+      const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(savedDeal.financialDetails?.trailingRevenueAmount || 0);
+      const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(savedDeal.financialDetails?.trailingEBITDAAmount || 0);
       const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
-        <p>Description: ${savedDeal.companyDescription}</p>
-        <p>T12 Revenue: ${savedDeal.financialDetails?.trailingRevenueAmount}</p>
-        <p>T12 Ebitda: ${savedDeal.financialDetails?.trailingEBITDAAmount}</p>
+        <p><b>Description</b>: ${savedDeal.companyDescription}</p>
+        <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
+        <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
       `);
       await this.mailService.sendEmailWithLogging(
         'johnm@cimamplify.com',
         'admin',
         ownerSubject,
         ownerHtmlBody,
-        [],
+        [ILLUSTRATION_ATTACHMENT],
         (savedDeal._id as Types.ObjectId).toString(),
       );
       
@@ -560,7 +562,7 @@ export class DealsService {
           }
         }
       },
-      { $match: { matchPercentage: { $gte: 90 } } },
+      { $match: { matchPercentage: { $gte: 95 } } },
       {
         $project: {
           _id: 1,

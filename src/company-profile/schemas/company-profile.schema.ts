@@ -129,7 +129,7 @@ export class CompanyProfile {
   companyType: string
 
   @ApiProperty({ description: "Capital entity" })
-  @Prop({ required: true })
+  @Prop({ required: false })
   capitalEntity: string
 
   @ApiProperty({ description: "Deals completed in last 5 years", nullable: true })

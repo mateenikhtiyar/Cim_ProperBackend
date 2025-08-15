@@ -24,4 +24,9 @@ export class CreateBuyerDto {
   @ApiProperty({ example: "Acme Inc", description: "Company name of the buyer" })
   @IsNotEmpty()
   companyName: string
+
+  @ApiProperty({ example: "https://acme.com", description: "Company website of the buyer" })
+  @IsNotEmpty()
+  @IsString()
+  website: string
 }
