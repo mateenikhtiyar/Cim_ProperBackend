@@ -9,6 +9,7 @@ import { AuthService } from "../auth/auth.service"
 import { MailService } from "../mail/mail.service"
 import { genericEmailTemplate } from "../mail/generic-email.template"
 import { CompanyProfile } from "../company-profile/schemas/company-profile.schema"
+import { ILLUSTRATION_ATTACHMENT } from "../mail/mail.service"
 
 @Injectable()
 export class BuyersService {
@@ -22,7 +23,7 @@ export class BuyersService {
   ) { }
 
   async create(createBuyerDto: CreateBuyerDto): Promise<Buyer> {
-    const { email, password } = createBuyerDto
+    const { email, password, companyName, website } = createBuyerDto
 
     const existingBuyer = await this.buyerModel.findOne({ email }).exec()
     if (existingBuyer) {
@@ -36,25 +37,36 @@ export class BuyersService {
       password: hashedPassword,
     })
 
-    const savedBuyer = await newBuyer.save()
+    let savedBuyer = await newBuyer.save()
+
+    const companyProfile = new this.companyProfileModel({
+      companyName,
+      website,
+      companyType: "Other", // Default value
+      buyer: savedBuyer._id,
+    });
+    const savedCompanyProfile = await companyProfile.save();
+
+    savedBuyer.companyProfileId = savedCompanyProfile._id;
+    savedBuyer = await savedBuyer.save();
+
     await this.authService.sendVerificationEmail(savedBuyer);
 
     // Send email to project owner
-    const companyProfile = await this.companyProfileModel.findById(savedBuyer.companyProfileId).exec();
-    const ownerSubject = `New Buyer (${savedBuyer.companyName})`;
+    const ownerSubject = `New Buyer ${savedBuyer.companyName}`;
     const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
-      <p>Company Name: ${savedBuyer.companyName}</p>
-      <p>Website: ${companyProfile?.website}</p>
-      <p>Main Contact: ${savedBuyer.fullName}</p>
-      <p>Main Contact Email: ${savedBuyer.email}</p>
-      <p>Main Contact Phone: ${savedBuyer.phone}</p>
+      <p><b>Company Name</b>: ${savedBuyer.companyName}</p>
+      <p><b>Website</b>: ${website}</p>
+      <p><b>Main Contact</b>: ${savedBuyer.fullName}</p>
+      <p><b>Main Contact Email</b>: ${savedBuyer.email}</p>
+      <p><b>Main Contact Phone</b>: ${savedBuyer.phone}</p>
     `);
     await this.mailService.sendEmailWithLogging(
       'johnm@cimamplify.com',
       'admin',
       ownerSubject,
       ownerHtmlBody,
-      [],
+      [ILLUSTRATION_ATTACHMENT],
       undefined,
     );
 
@@ -142,23 +154,34 @@ export class BuyersService {
         isGoogleAccount: true,
       })
 
-      buyer = await newBuyer.save()
+      let savedBuyer = await newBuyer.save()
+
+      const companyProfile = new this.companyProfileModel({
+        companyName: "Set your company name",
+        website: "",
+        companyType: "Other", // Default value
+        buyer: savedBuyer._id,
+      });
+      const savedCompanyProfile = await companyProfile.save();
+
+      savedBuyer.companyProfileId = savedCompanyProfile._id;
+      buyer = await savedBuyer.save();
+
       // Send email to project owner
-      const companyProfile = await this.companyProfileModel.findById(buyer.companyProfileId).exec();
-      const ownerSubject = `New Buyer (${buyer.companyName})`;
+      const ownerSubject = `New Buyer ${buyer.companyName}`;
       const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
-        <p>Company Name: ${buyer.companyName}</p>
-        <p>Website: ${companyProfile?.website}</p>
-        <p>Main Contact: ${buyer.fullName}</p>
-        <p>Main Contact Email: ${buyer.email}</p>
-        <p>Main Contact Phone: ${buyer.phone}</p>
+        <p><b>Company Name</b>: ${buyer.companyName}</p>
+        <p><b>Website</b>: </p>
+        <p><b>Main Contact</b>: ${buyer.fullName}</p>
+        <p><b>Main Contact Email</b>: ${buyer.email}</p>
+        <p><b>Main Contact Phone</b>: ${buyer.phone}</p>
       `);
       await this.mailService.sendEmailWithLogging(
         'johnm@cimamplify.com',
         'admin',
         ownerSubject,
         ownerHtmlBody,
-        [],
+        [ILLUSTRATION_ATTACHMENT],
         undefined,
       );
     }
