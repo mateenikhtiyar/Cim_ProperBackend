@@ -562,7 +562,7 @@ export class DealsService {
           }
         }
       },
-      { $match: { matchPercentage: { $gte: 95 } } },
+      { $match: { matchPercentage: { $gte: 100 } } },
       {
         $project: {
           _id: 1,
