@@ -562,7 +562,7 @@ export class DealsService {
           }
         }
       },
-      { $match: { matchPercentage: { $gte: 95 } } },
+      { $match: { matchPercentage: { $gte: 100 } } },
       {
         $project: {
           _id: 1,
@@ -674,12 +674,11 @@ export class DealsService {
           const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingRevenueAmount || 0);
           const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
           const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-            CIM Amplify  deals are often exclusive first look for CIM Amplify Members only, so head to your CIM Amplify (<a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a>) under Pending and click Move to Active button to activate.
-            <b><p>Details: ${deal.companyDescription}</p></b>
+            <p><b>Details:</b> ${deal.companyDescription}</p>
             <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
             <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
-            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify (<a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a>) under Pending and click Move to Active button to activate.</p>
-            <p>Please finally keep your dashboard up to date by moving Pending deals to either <b>Pass</b> or <b>Move to Active<b/>.</p>
+            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify (<a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a>) under Pending and click <strong>Move to Active</strong> button to see more details.</p>
+            <p>Finally, please keep your dashboard up to date by moving Pending deals to either <b>Pass</b> or <b>Move to Active<b/>.</p>
           `);
   
           await this.mailService.sendEmailWithLogging(
@@ -844,7 +843,7 @@ export class DealsService {
               <strong>Seller contact</strong><br>
               ${seller.fullName}<br>
               ${seller.companyName}<br>
-              ${seller.email}
+              ${seller.email}<br>
               ${seller.website}
             </p>
             <p>If you don’t hear back within 2 business days, reply to this email and our team will assist. You can also access this deal from your <a href="${process.env.FRONTEND_URL}/buyer/login">buyer dashboard</a>.</p>
@@ -1385,20 +1384,20 @@ export class DealsService {
         // Send email to project owner
         const ownerSubject = `Deal Complete ${dealDoc.title}`;
         const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
-          <p>Date Completed: ${new Date().toLocaleDateString()}</p>
-          <p>Transaction value: ${finalSalePrice}</p>
-          <p>Seller Name: ${seller.fullName}</p>
-          <p>Seller Company: ${seller.companyName}</p>
-          <p>Buyer Name: ${winningBuyer.fullName}</p>
-          <p>Buyer Company: ${winningBuyer.companyName}</p>
-          <p>Buyer Email: ${winningBuyer.email}</p>
+          <p><b>Date Completed:</b> ${new Date().toLocaleDateString()}</p>
+          <p><b>Transaction value:</b> ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(finalSalePrice || 0)}</p>
+          <p><b>Seller Name:</b> ${seller.fullName}</p>
+          <p><b>Seller Company:</b> ${seller.companyName}</p>
+          <p><b>Buyer Name:</b> ${winningBuyer.fullName}</p>
+          <p><b>Buyer Company:</b> ${winningBuyer.companyName}</p>
+          <p><b>Buyer Email:</b> ${winningBuyer.email}</p>
         `);
         await this.mailService.sendEmailWithLogging(
           'johnm@cimamplify.com',
           'admin',
           ownerSubject,
           ownerHtmlBody,
-          [],
+          [ILLUSTRATION_ATTACHMENT],
           dealIdStr,
         );
       }
