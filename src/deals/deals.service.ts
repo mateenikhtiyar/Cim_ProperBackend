@@ -303,6 +303,350 @@ export class DealsService {
       .exec()
   }
 
+  // async findMatchingBuyers(dealId: string): Promise<any[]> {
+  //   const deal = await this.findOne(dealId);
+  //   const companyProfileModel = this.dealModel.db.model('CompanyProfile');
+  //   const expandedGeos = expandCountryOrRegion(deal.geographySelection);
+  //   const { rewardLevel } = deal;
+  //   let extraMatchCondition: any = {};
+  //   if (rewardLevel === "Seed") {
+  //     extraMatchCondition = {
+  //       "preferences.doNotSendMarketedDeals": { $ne: true }
+  //     };
+  //   }
+  //   // Get only real buyer IDs from invitationStatus (Map or object)
+  //   const alreadyInvitedBuyerIds = deal.invitationStatus instanceof Map
+  //     ? Array.from(deal.invitationStatus.keys())
+  //     : Object.keys(deal.invitationStatus || {});
+  //   console.log('DEBUG: alreadyInvitedBuyerIds:', alreadyInvitedBuyerIds);
+  //   const companyProfiles = await companyProfileModel.find({}).lean();
+  //   console.log('DEBUG: CompanyProfile buyers:', companyProfiles.map(cp => cp.buyer));
+  //   const mandatoryQuery: any = {
+  //     "preferences.stopSendingDeals": { $ne: true },
+  //     "targetCriteria.countries": { $in: expandedGeos },
+  //     "targetCriteria.industrySectors": deal.industrySector,
+  //     ...extraMatchCondition,
+  //   };
+  //   const matchingProfiles = await companyProfileModel.aggregate([
+  //     { $match: mandatoryQuery },
+  //     ...(alreadyInvitedBuyerIds.length > 0
+  //       ? [
+  //           {
+  //             $addFields: {
+  //               buyerStr: { $toString: "$buyer" }
+  //             }
+  //           },
+  //           { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
+  //         ]
+
+  //       : []),
+  //     {
+  //       $lookup: {
+  //         from: 'buyers',
+  //         localField: 'buyer',
+  //         foreignField: '_id',
+  //         as: 'buyerInfo',
+  //       },
+  //     },
+  //     { $unwind: '$buyerInfo' },
+  //     {
+  //       $addFields: {
+  //         industryMatch: 10,
+  //         geographyMatch: 10,
+  //         revenueMatch: {
+  //           $cond: [
+  //             {
+  //               $and: [
+  //                 {
+  //                   $or: [
+  //                     { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
+  //                     { $gte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMin", 0] }] }
+  //                   ]
+  //                 },
+  //                 {
+  //                   $or: [
+  //                     { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+  //                     { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
+  //                   ]
+  //                 }
+  //               ]
+  //             },
+  //             8, 0
+  //           ]
+  //         },
+  //         ebitdaMatch: {
+  //           $cond: [
+  //             {
+  //               $and: [
+  //                 {
+  //                   $or: [
+  //                     { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
+  //                     {
+  //                       $cond: [
+  //                         { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", 0] }, 0] },
+  //                         { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, 0] },
+  //                         { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMin", 0] }] }
+  //                       ]
+  //                     }
+  //                   ]
+  //                 },
+  //                 {
+  //                   $or: [
+  //                     { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+  //                     { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
+  //                   ]
+  //                 }
+  //               ]
+  //             },
+  //             8, 0
+  //           ]
+  //         },
+  //         revenueGrowthMatch: {
+  //           $cond: [
+  //             {
+  //               $or: [
+  //                 { $eq: [{ $ifNull: ["$targetCriteria.revenueGrowth", null] }, null] },
+  //                 { $gte: [{ $ifNull: [deal.financialDetails?.avgRevenueGrowth || 0, 0] }, { $ifNull: ["$targetCriteria.revenueGrowth", 0] }] }
+  //               ]
+  //             },
+  //             5, 0
+  //           ]
+  //         },
+  //         yearsMatch: {
+  //           $cond: [
+  //             {
+  //               $or: [
+  //                 { $eq: [{ $ifNull: ["$targetCriteria.minYearsInBusiness", null] }, null] },
+  //                 { $gte: [deal.yearsInBusiness || 0, { $ifNull: ["$targetCriteria.minYearsInBusiness", 0] }] }
+  //               ]
+  //             },
+  //             5, 0
+  //           ]
+  //         },
+  //         businessModelMatch: {
+  //           $cond: [
+  //             {
+  //               $or: [
+  //                 {
+  //                   $and: [
+  //                     { $eq: [deal.businessModel?.recurringRevenue || false, true] },
+  //                     { $in: ["Recurring Revenue", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+  //                   ]
+  //                 },
+  //                 {
+  //                   $and: [
+  //                     { $eq: [deal.businessModel?.projectBased || false, true] },
+  //                     { $in: ["Project-Based", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+  //                   ]
+  //                 },
+  //                 {
+  //                   $and: [
+  //                     { $eq: [deal.businessModel?.assetLight || false, true] },
+  //                     { $in: ["Asset Light", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+  //                   ]
+  //                 },
+  //                 {
+  //                   $and: [
+  //                     { $eq: [deal.businessModel?.assetHeavy || false, true] },
+  //                     { $in: ["Asset Heavy", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
+  //                   ]
+  //                 }
+  //               ]
+  //             },
+  //             12, 0
+  //           ]
+  //         },
+  //         capitalAvailabilityMatch: {
+  //           $cond: [
+  //             {
+  //               $or: [
+  //                 { $eq: [{ $ifNull: [deal.buyerFit?.capitalAvailability || [], null] }, null] },
+  //                 { $eq: [{ $size: { $ifNull: [deal.buyerFit?.capitalAvailability || [], []] } }, 0] },
+  //                 { $in: ["$capitalEntity", deal.buyerFit?.capitalAvailability || []] }
+  //               ]
+  //             },
+  //             4, 0
+  //           ]
+  //         },
+  //         companyTypeMatch: {
+  //           $cond: [
+  //             {
+  //               $or: [
+  //                 { $eq: [{ $ifNull: [deal.companyType || [], null] }, null] },
+  //                 { $eq: [{ $size: { $ifNull: [deal.companyType || [], []] } }, 0] },
+  //                 { $in: ["$companyType", deal.companyType || []] }
+  //               ]
+  //             },
+  //             4, 0
+  //           ]
+  //         },
+  //         minTransactionSizeMatch: {
+  //           $cond: [
+  //             {
+  //               $and: [
+  //                 { $gte: [deal.buyerFit?.minTransactionSize || 0, { $ifNull: ["$targetCriteria.transactionSizeMin", 0] }] },
+  //                 { $lte: [deal.buyerFit?.minTransactionSize || 0, { $ifNull: ["$targetCriteria.transactionSizeMax", Number.MAX_SAFE_INTEGER] }] }
+  //               ]
+  //             },
+  //             5, 0
+  //           ]
+  //         },
+  //         priorAcquisitionsMatch: {
+  //           $cond: [
+  //             {
+  //               $or: [
+  //                 { $eq: [{ $ifNull: [deal.buyerFit?.minPriorAcquisitions || null, null] }, null] },
+  //                 { $gte: [{ $ifNull: ["$dealsCompletedLast5Years", 0] }, { $ifNull: [deal.buyerFit?.minPriorAcquisitions || 0, 0] }] }
+  //               ]
+  //             },
+  //             5, 0
+  //           ]
+  //         },
+  //         stakePercentageMatch: {
+  //           $cond: [
+  //             {
+  //               $or: [
+  //                 { $eq: [{ $ifNull: ["$targetCriteria.minStakePercent", null] }, null] },
+  //                 { $eq: [{ $ifNull: [deal.stakePercentage || null, null] }, null] },
+  //                 { $gte: [{ $ifNull: [deal.stakePercentage || 100, 100] }, { $ifNull: ["$targetCriteria.minStakePercent", 0] }] }
+  //               ]
+  //             },
+  //             4, 0
+  //           ]
+  //         }
+  //       }
+  //     },
+  //     {
+  //       $addFields: {
+  //         totalMatchScore: {
+  //           $sum: [
+  //             "$industryMatch",
+  //             "$geographyMatch",
+  //             "$revenueMatch",
+  //             "$ebitdaMatch",
+  //             "$revenueGrowthMatch",
+  //             "$yearsMatch",
+  //             "$businessModelMatch",
+  //             "$capitalAvailabilityMatch",
+  //             "$companyTypeMatch",
+  //             "$minTransactionSizeMatch",
+  //             "$priorAcquisitionsMatch",
+  //             "$stakePercentageMatch"
+  //           ]
+  //         },
+  //         matchPercentage: {
+  //           $multiply: [
+  //             {
+  //               $divide: [
+  //                 {
+  //                   $sum: [
+  //                     "$industryMatch",
+  //                     "$geographyMatch",
+  //                     "$revenueMatch",
+  //                     "$ebitdaMatch",
+  //                     "$revenueGrowthMatch",
+  //                     "$yearsMatch",
+  //                     "$businessModelMatch",
+  //                     "$capitalAvailabilityMatch",
+  //                     "$companyTypeMatch",
+  //                     "$minTransactionSizeMatch",
+  //                     "$priorAcquisitionsMatch",
+  //                     "$stakePercentageMatch"
+  //                   ]
+  //                 },
+  //                 80 // 10+10+8+8+5+5+12+4+4+5+5+4 = 80
+  //               ]
+  //             },
+  //             100
+  //           ]
+  //         }
+  //       }
+  //     },
+  //     { $match: { matchPercentage: { $gte: 100 } } },
+  //     {
+  //       $project: {
+  //         _id: 1,
+  //         companyName: 1,
+  //         buyerId: "$buyer",
+  //         buyerName: "$buyerInfo.fullName",
+  //         buyerEmail: "$buyerInfo.email",
+  //         targetCriteria: 1,
+  //         preferences: 1,
+  //         companyType: 1,
+  //         capitalEntity: 1,
+  //         dealsCompletedLast5Years: 1,
+  //         averageDealSize: 1,
+  //         totalMatchScore: 1,
+  //         matchPercentage: { $round: ["$matchPercentage", 0] },
+  //         website: "$website",
+  //         matchScores: {
+  //           industryMatch: "$industryMatch",
+  //           geographyMatch: "$geographyMatch",
+  //           revenueMatch: "$revenueMatch",
+  //           ebitdaMatch: "$ebitdaMatch",
+  //           revenueGrowthMatch: "$revenueGrowthMatch",
+  //           yearsMatch: "$yearsMatch",
+  //           businessModelMatch: "$businessModelMatch",
+  //           capitalAvailabilityMatch: "$capitalAvailabilityMatch",
+  //           companyTypeMatch: "$companyTypeMatch",
+  //           minTransactionSizeMatch: "$minTransactionSizeMatch",
+  //           priorAcquisitionsMatch: "$priorAcquisitionsMatch",
+  //           stakePercentageMatch: "$stakePercentageMatch"
+  //         },
+  //         matchDetails: {
+  //           industryMatch: true,
+  //           geographyMatch: true,
+  //           revenueMatch: { $gt: ["$revenueMatch", 0] },
+  //           ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
+  //           revenueGrowthMatch: { $gt: ["$revenueGrowthMatch", 0] },
+  //           yearsMatch: { $gt: ["$yearsMatch", 0] },
+  //           businessModelMatch: { $gt: ["$businessModelMatch", 0] },
+  //           capitalAvailabilityMatch: { $gt: ["$capitalAvailabilityMatch", 0] },
+  //           companyTypeMatch: { $gt: ["$companyTypeMatch", 0] },
+  //           minTransactionSizeMatch: { $gt: ["$minTransactionSizeMatch", 0] },
+  //           priorAcquisitionsMatch: { $gt: ["$priorAcquisitionsMatch", 0] },
+  //           stakePercentageMatch: { $gt: ["$stakePercentageMatch", 0] }
+  //         },
+  //         criteriaDetails: {
+  //           dealIndustry: deal.industrySector,
+  //           dealGeography: deal.geographySelection,
+  //           dealRevenue: deal.financialDetails?.trailingRevenueAmount || null,
+  //           dealEbitda: deal.financialDetails?.trailingEBITDAAmount || null,
+  //           dealAvgRevenueGrowth: deal.financialDetails?.avgRevenueGrowth || null,
+  //           dealYearsInBusiness: deal.yearsInBusiness || null,
+  //           dealStakePercentage: deal.stakePercentage || null,
+  //           dealCompanyType: deal.companyType || [],
+  //           dealCapitalAvailability: deal.buyerFit?.capitalAvailability || [],
+  //           dealMinTransactionSize: deal.buyerFit?.minTransactionSize || null,
+  //           dealMinPriorAcquisitions: deal.buyerFit?.minPriorAcquisitions || null,
+  //           dealRewardLevel: deal.rewardLevel,
+  //           expandedGeographies: expandedGeos
+  //         }
+  //       }
+  //     },
+  //     { $sort: { matchPercentage: -1, companyName: 1 } }
+  //   ]).exec();
+  //   return matchingProfiles;
+  // }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  // -------------------------------------------------------------------------------------------------------------------------
+
+
+
   async findMatchingBuyers(dealId: string): Promise<any[]> {
     const deal = await this.findOne(dealId);
     const companyProfileModel = this.dealModel.db.model('CompanyProfile');
@@ -331,14 +675,13 @@ export class DealsService {
       { $match: mandatoryQuery },
       ...(alreadyInvitedBuyerIds.length > 0
         ? [
-            {
-              $addFields: {
-                buyerStr: { $toString: "$buyer" }
-              }
-            },
-            { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
-          ]
-
+          {
+            $addFields: {
+              buyerStr: { $toString: "$buyer" }
+            }
+          },
+          { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
+        ]
         : []),
       {
         $lookup: {
@@ -353,49 +696,25 @@ export class DealsService {
         $addFields: {
           industryMatch: 10,
           geographyMatch: 10,
+          // UPDATED: Revenue match - only check if deal revenue is <= buyer's max (ignore min)
           revenueMatch: {
             $cond: [
               {
-                $and: [
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
-                      { $gte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMin", 0] }] }
-                    ]
-                  },
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
-                      { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
-                    ]
-                  }
+                $or: [
+                  { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+                  { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
                 ]
               },
               8, 0
             ]
           },
+          // UPDATED: EBITDA match - only check if deal EBITDA is <= buyer's max (ignore min)
           ebitdaMatch: {
             $cond: [
               {
-                $and: [
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
-                      {
-                        $cond: [
-                          { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", 0] }, 0] },
-                          { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, 0] },
-                          { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMin", 0] }] }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    $or: [
-                      { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
-                      { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
-                    ]
-                  }
+                $or: [
+                  { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+                  { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
                 ]
               },
               8, 0
@@ -628,23 +947,6 @@ export class DealsService {
     ]).exec();
     return matchingProfiles;
   }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  // -------------------------------------------------------------------------------------------------------------------------
-
   async targetDealToBuyers(dealId: string, buyerIds: string[]): Promise<DealDocument> {
     const deal = (await this.dealModel.findById(dealId).exec()) as DealDocument;
   
