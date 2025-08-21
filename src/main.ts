@@ -13,12 +13,11 @@ async function bootstrap() {
     const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
     let frontendUrl = process.env.FRONTEND_URL || "https://app.cimamplify.com"
-    // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
     }
 
-    // Increase body size limit for large uploads
+    // Body size limit
     app.use(express.json({ limit: '10mb' }))
     app.use(express.urlencoded({ limit: '10mb', extended: true }))
 
@@ -27,9 +26,7 @@ async function bootstrap() {
         transform: true,
         whitelist: true,
         forbidNonWhitelisted: true,
-        transformOptions: {
-          enableImplicitConversion: true,
-        },
+        transformOptions: { enableImplicitConversion: true },
       }),
     )
 
@@ -44,20 +41,15 @@ async function bootstrap() {
     app.useStaticAssets(join(__dirname, '..', 'uploads'), { prefix: '/uploads' })
     app.useStaticAssets(join(__dirname, '..', 'assets'), { prefix: '/assets' })
 
-    // ✅ Fixed CORS configuration (allow credentials + exact origin)
+    // ✅ Fixed CORS configuration
     app.enableCors({
-      origin: (origin, callback) => {
-        const allowedOrigins = [frontendUrl]
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, origin)
-        } else {
-          callback(new Error("Not allowed by CORS"))
-        }
-      },
+      origin: frontendUrl, // must be exact, not "*"
       credentials: true,
+      methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+      allowedHeaders: "Content-Type, Authorization, X-Requested-With, Accept",
     })
 
-    // Swagger setup
+    // Swagger
     const config = new DocumentBuilder()
       .setTitle("E-commerce API")
       .setDescription("The E-commerce API documentation")
