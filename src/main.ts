@@ -43,7 +43,7 @@ async function bootstrap() {
     });
     // Fix CORS configuration
     app.enableCors({
-      origin: ["https://app.cimamplify.com", "*"],
+      origin: "https://app.cimamplify.com",
       credentials: true,
     })
     // Setup Swagger
