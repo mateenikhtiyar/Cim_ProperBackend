@@ -42,10 +42,7 @@ async function bootstrap() {
       prefix: '/assets',
     });
     // Fix CORS configuration
-    app.enableCors({
-      origin: "https://app.cimamplify.com",
-      credentials: false,
-    })
+    app.enableCors()
     // Setup Swagger
     const config = new DocumentBuilder()
       .setTitle("E-commerce API")
