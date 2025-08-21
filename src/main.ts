@@ -10,7 +10,7 @@ import * as express from "express"
 async function bootstrap() {
   try {
     const app = await NestFactory.create<NestExpressApplication>(AppModule);
-    let frontendUrl = process.env.FRONTEND_URL || "https://buyer.cimamplify.com"
+    let frontendUrl = process.env.FRONTEND_URL || "https://app.cimamplify.com"
     // Remove trailing slash if present
     if (frontendUrl.endsWith("/")) {
       frontendUrl = frontendUrl.slice(0, -1)
