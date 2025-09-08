@@ -4,10 +4,12 @@ import { ApiProperty } from "@nestjs/swagger"
 
 export interface BuyerDocument extends Buyer, Document {
   _id: string
+  createdAt: Date
+  updatedAt: Date
   toObject(): any
 }
 
-@Schema()
+@Schema({ timestamps: true })
 export class Buyer {
   @ApiProperty({ description: "Full name of the buyer" })
   @Prop({ required: true })
