@@ -22,6 +22,68 @@ export class BuyersService {
     private mailService: MailService
   ) { }
 
+  private isProfileComplete(profile: CompanyProfile): boolean {
+    return !!(
+      profile.companyName &&
+      profile.companyName !== "Set your company name" &&
+      profile.website &&
+      profile.companyType &&
+      profile.companyType !== "Other" &&
+      profile.capitalEntity &&
+      profile.dealsCompletedLast5Years !== undefined &&
+      profile.averageDealSize !== undefined &&
+      profile.targetCriteria?.countries?.length > 0 &&
+      profile.targetCriteria?.industrySectors?.length > 0 &&
+      profile.targetCriteria?.revenueMin !== undefined &&
+      profile.targetCriteria?.revenueMax !== undefined &&
+      profile.targetCriteria?.ebitdaMin !== undefined &&
+      profile.targetCriteria?.ebitdaMax !== undefined &&
+      profile.targetCriteria?.transactionSizeMin !== undefined &&
+      profile.targetCriteria?.transactionSizeMax !== undefined &&
+      profile.targetCriteria?.revenueGrowth !== undefined &&
+      profile.targetCriteria?.minStakePercent !== undefined &&
+      profile.targetCriteria?.minYearsInBusiness !== undefined &&
+      profile.targetCriteria?.preferredBusinessModels?.length > 0 &&
+      profile.targetCriteria?.description &&
+      profile.agreements?.feeAgreementAccepted
+    );
+  }
+
+  async sendProfileCompletionReminder(buyerId: string): Promise<void> {
+    const buyer = await this.buyerModel.findById(buyerId).populate('companyProfileId').exec();
+    if (!buyer || !buyer.companyProfileId) {
+      throw new NotFoundException("Buyer or profile not found");
+    }
+
+    const profile = buyer.companyProfileId as any;
+    
+    if (!this.isProfileComplete(profile)) {
+      const subject = 'Complete Your Company Profile to Get the Best Matching Deals';
+      const emailContent = `
+        <p>We noticed you haven't completed your company profile yet. To ensure you receive the most relevant acquisition opportunities, please take a few minutes to complete your profile.</p>
+        <p>A complete profile helps us match you with deals that fit your specific criteria, including:</p>
+        <ul>
+          <li>Target industries and geographic regions</li>
+          <li>Revenue and EBITDA ranges</li>
+          <li>Transaction size preferences</li>
+          <li>Business model preferences</li>
+        </ul>
+        <p><a href="${process.env.FRONTEND_URL}/buyer/login" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Complete Your Profile Now</a></p>
+        <p>Don't miss out on great opportunities - complete your profile today!</p>
+      `;
+
+      const emailBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
+
+      await this.mailService.sendEmailWithLogging(
+        buyer.email,
+        'buyer',
+        subject,
+        emailBody,
+        [ILLUSTRATION_ATTACHMENT]
+      );
+    }
+  }
+
   async create(createBuyerDto: CreateBuyerDto): Promise<Buyer> {
     const { email, password, companyName, website } = createBuyerDto
 

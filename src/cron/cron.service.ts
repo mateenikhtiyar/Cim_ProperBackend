@@ -11,6 +11,7 @@ import { genericEmailTemplate } from '../mail/generic-email.template';
 import { ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
 import { join } from 'path';
 import { EmailVerification, EmailVerificationDocument } from '../auth/schemas/email-verification.schema';
+import { CompanyProfile, CompanyProfileDocument } from '../company-profile/schemas/company-profile.schema';
 
 @Injectable()
 export class CronService {
@@ -21,8 +22,85 @@ export class CronService {
     private mailService: MailService,
     @InjectModel(Seller.name) private sellerModel: Model<SellerDocument>,
     @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
+    @InjectModel(CompanyProfile.name) private companyProfileModel: Model<CompanyProfileDocument>,
     @InjectModel(EmailVerification.name) private emailVerificationModel: Model<EmailVerificationDocument>,
   ) {}
+
+
+  private isProfileComplete(profile: CompanyProfile): boolean {
+    return !!(
+      profile.companyName &&
+      profile.companyName !== "Set your company name" &&
+      profile.website &&
+      profile.companyType &&
+      profile.companyType !== "Other" &&
+      profile.capitalEntity &&
+      profile.dealsCompletedLast5Years !== undefined &&
+      profile.averageDealSize !== undefined &&
+      profile.targetCriteria?.countries?.length > 0 &&
+      profile.targetCriteria?.industrySectors?.length > 0 &&
+      profile.targetCriteria?.revenueMin !== undefined &&
+      profile.targetCriteria?.revenueMax !== undefined &&
+      profile.targetCriteria?.ebitdaMin !== undefined &&
+      profile.targetCriteria?.ebitdaMax !== undefined &&
+      profile.targetCriteria?.transactionSizeMin !== undefined &&
+      profile.targetCriteria?.transactionSizeMax !== undefined &&
+      profile.targetCriteria?.revenueGrowth !== undefined &&
+      profile.targetCriteria?.minStakePercent !== undefined &&
+      profile.targetCriteria?.minYearsInBusiness !== undefined &&
+      profile.targetCriteria?.preferredBusinessModels?.length > 0 &&
+      profile.targetCriteria?.description &&
+      profile.agreements?.feeAgreementAccepted
+    );
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  async handleProfileCompletionReminder() {
+    this.logger.log('Running profile completion reminder cron job');
+    
+    const twentyFourHoursAgo = new Date();
+    twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+    // Find buyers who registered 24+ hours ago
+    const buyers = await this.buyerModel.find({
+      createdAt: { $lte: twentyFourHoursAgo }
+    }).populate('companyProfileId').exec();
+
+    for (const buyer of buyers) {
+      if (!buyer.companyProfileId) continue;
+
+      const profile = buyer.companyProfileId as any;
+      
+      // Check if profile is incomplete
+      if (!this.isProfileComplete(profile)) {
+        const subject = 'Complete Your Company Profile to Get the Best Matching Deals';
+        const emailContent = `
+          <p>We noticed you haven't completed your company profile yet. To ensure you receive the most relevant acquisition opportunities, please take a few minutes to complete your profile.</p>
+          <p>A complete profile helps us match you with deals that fit your specific criteria, including:</p>
+          <ul>
+            <li>Target industries and geographic regions</li>
+            <li>Revenue and EBITDA ranges</li>
+            <li>Transaction size preferences</li>
+            <li>Business model preferences</li>
+          </ul>
+          <p><a href="${process.env.FRONTEND_URL}/buyer/login" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Complete Your Profile Now</a></p>
+          <p>Don't miss out on great opportunities - complete your profile today!</p>
+        `;
+
+        const emailBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
+
+        await this.mailService.sendEmailWithLogging(
+          buyer.email,
+          'buyer',
+          subject,
+          emailBody,
+          [ILLUSTRATION_ATTACHMENT]
+        );
+
+        this.logger.log(`Profile completion reminder sent to buyer: ${buyer.email}`);
+      }
+    }
+  }
 
   @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
   async handleMonthlySellerActivitySummary() {
