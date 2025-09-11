@@ -802,9 +802,9 @@ export class DealsService {
           minTransactionSizeMatch: {
             $cond: [
               {
-                $and: [
-                  { $gte: [deal.buyerFit?.minTransactionSize || 0, { $ifNull: ["$targetCriteria.transactionSizeMin", 0] }] },
-                  { $lte: [deal.buyerFit?.minTransactionSize || 0, { $ifNull: ["$targetCriteria.transactionSizeMax", Number.MAX_SAFE_INTEGER] }] }
+                $or: [
+                  { $eq: [{ $ifNull: ["$targetCriteria.transactionSizeMax", null] }, null] }, // If buyer has no max transaction size, consider it a match.
+                  { $lte: [deal.financialDetails?.askingPrice || 0, { $ifNull: ["$targetCriteria.transactionSizeMax", Number.MAX_SAFE_INTEGER] }] }
                 ]
               },
               5, 0
