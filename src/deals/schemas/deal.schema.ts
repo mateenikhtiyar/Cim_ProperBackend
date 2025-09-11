@@ -320,6 +320,13 @@ export const DealSchema = SchemaFactory.createForClass(Deal)
 // Add index for better search performance
 DealSchema.index({ title: "text", companyDescription: "text", tags: "text" })
 
+DealSchema.index({ seller: 1 });
+DealSchema.index({ status: 1 });
+DealSchema.index({ "timeline.completedAt": -1 });
+DealSchema.index({ targetedBuyers: 1 });
+DealSchema.index({ interestedBuyers: 1 });
+DealSchema.index({ "invitationStatus.$**": 1 });
+
 // Add createdAt and updatedAt timestamps
 DealSchema.pre("save", function (next) {
   if (this.isNew) {
