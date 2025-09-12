@@ -371,8 +371,19 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiOperation({ summary: "Get all deals (admin only)" })
   @ApiResponse({ status: 200, description: "Return all deals", type: [DealResponseDto] })
   @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
-  async findAllAdmin() {
-    return this.dealsService.findAll()
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number for pagination' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search term for deals' })
+  @ApiQuery({ name: 'buyerResponse', required: false, type: String, description: 'Filter deals by buyer response status' })
+  @ApiQuery({ name: 'status', required: false, type: String, description: 'Filter deals by status' })
+  async findAllAdmin(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+    @Query('search') search: string = '',
+    @Query('buyerResponse') buyerResponse?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.dealsService.findAll({ search, buyerResponse, status }, page, limit)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
