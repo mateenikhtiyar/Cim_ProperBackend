@@ -10,7 +10,6 @@ import { AdminModule } from "admin/admin.module"
 import { SellersModule } from "sellers/sellers.module"
 import { DealsModule } from "deals/deals.module"
 import { DealTrackingModule } from "deal-tracking/deal-tracking.module"
-import { SharedModule } from "shared.module"
 import { DealsService } from "deals/deals.service"
 import { MailModule } from './mail/mail.module';
 
@@ -31,7 +30,6 @@ import * as path from 'path';
       serveRoot: "/Uploads",
     }),
     ScheduleModule.forRoot(),
-    SharedModule,
     BuyersModule,
     AuthModule,
     CompanyProfileModule,
@@ -42,13 +40,7 @@ import * as path from 'path';
     MailModule,
     CronModule,
   ],
-  providers: [
-    // Make DealsService available globally
-    {
-      provide: "DealsService",
-      useClass: DealsService,
-    },
-  ],
+  providers: [],
   controllers: [],
 })
 export class AppModule { }

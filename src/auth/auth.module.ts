@@ -9,7 +9,6 @@ import { JwtStrategy } from "./strategies/jwt.strategy"
 import { GoogleStrategy } from "./strategies/google.strategy"
 import { SellerGoogleStrategy } from "./strategies/seller-google.strategy"
 import { RolesGuard } from "../auth/guards/roles.guard"
-import { SharedModule } from "../shared.module"
 import { MailService } from "mail/mail.service"
 import { MongooseModule } from "@nestjs/mongoose"
 import { EmailVerification, EmailVerificationSchema } from './schemas/email-verification.schema';
@@ -17,17 +16,20 @@ import { BuyersModule } from '../buyers/buyers.module';
 import { SellersModule } from '../sellers/sellers.module';
 import { MailModule } from '../mail/mail.module';
 import { AdminModule } from '../admin/admin.module';
+import { Buyer, BuyerSchema } from '../buyers/schemas/buyer.schema';
+import { Seller, SellerSchema } from '../sellers/schemas/seller.schema';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: EmailVerification.name, schema: EmailVerificationSchema },
+      { name: Buyer.name, schema: BuyerSchema },
+      { name: Seller.name, schema: SellerSchema },
     ]),
     forwardRef(() => BuyersModule),
     forwardRef(() => SellersModule),
     forwardRef(() => AdminModule),
     MailModule,
-    SharedModule, // Handle circular dependency
     PassportModule,
     ConfigModule,
     JwtModule.registerAsync({
@@ -67,7 +69,7 @@ import { AdminModule } from '../admin/admin.module';
 export class AuthModule {
   constructor() {
     const logger = new Logger("AuthModule")
-    const imports = ["SharedModule", "PassportModule", "ConfigModule", "JwtModule"]
+    const imports = ["PassportModule", "ConfigModule", "JwtModule"]
     imports.forEach((importName, index) => {
       logger.log(`AuthModule import at index [${index}]: ${importName}`)
     })

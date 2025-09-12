@@ -4,10 +4,12 @@ import { SellersController } from "./sellers.controller"
 import { SellersService } from "./sellers.service"
 import { AuthModule } from "../auth/auth.module"
 import { ConfigModule } from "@nestjs/config"
-import { SharedModule } from "../shared.module"
 import { DealsService } from "../deals/deals.service"
 import * as fs from 'fs';
 import { MailModule } from "mail/mail.module";
+import { MongooseModule } from "@nestjs/mongoose";
+import { Seller, SellerSchema } from "./schemas/seller.schema";
+import { DealsModule } from "../deals/deals.module";
 
 // Ensure upload directory exists
 const uploadDir = './uploads/profile-pictures';
@@ -18,15 +20,16 @@ if (!fs.existsSync(uploadDir)) {
 @Module({
   imports: [
     forwardRef(() => AuthModule),
-    forwardRef(() => SharedModule),
     ConfigModule,
     MailModule,
+    MongooseModule.forFeature([{ name: Seller.name, schema: SellerSchema }]),
     MulterModule.register({
       dest: './uploads/profile-pictures',
     }),
+    forwardRef(() => DealsModule),
   ],
   controllers: [SellersController],
-  providers: [SellersService, DealsService],
+  providers: [SellersService],
   exports: [SellersService],
 })
 export class SellersModule { }

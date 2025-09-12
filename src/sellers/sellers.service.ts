@@ -38,9 +38,10 @@ export class SellersService {
     }
   }
 
-  async findAll(): Promise<Seller[]> {
+  async findAll(page: number = 1, limit: number = 10): Promise<any> {
     try {
-      const sellers = await this.sellerModel.aggregate([
+      const skip = (page - 1) * limit;
+      const pipeline = [
         {
           $lookup: {
             from: 'deals',
@@ -92,14 +93,25 @@ export class SellersService {
             },
           },
         },
-      ]).exec();
+      ];
+
+      const sellers = await this.sellerModel.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]).exec();
+      const totalSellers = await this.sellerModel.aggregate([...pipeline, { $count: 'total' }]).exec();
+      const total = totalSellers.length > 0 ? totalSellers[0].total : 0;
+
       this.logger.debug(`Fetched ${sellers.length} sellers with deal counts`);
       this.logger.debug(`Seller deal counts: ${JSON.stringify(sellers.map(s => ({
         email: s.email,
         activeDealsCount: s.activeDealsCount,
         offMarketDealsCount: s.offMarketDealsCount,
       })))}`);
-      return sellers;
+
+      return {
+        data: sellers,
+        total: total,
+        page,
+        lastPage: Math.ceil(total / limit),
+      };
     } catch (error) {
       this.logger.error(`Error fetching all sellers: ${error.message}`, error.stack);
       throw error;

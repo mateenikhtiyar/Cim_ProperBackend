@@ -110,8 +110,47 @@ export class DealsService {
 
 
 
-  async findAll(query: any = {}): Promise<Deal[]> {
-    return this.dealModel.find(query).exec()
+  async findAll(filters: { search?: string, buyerResponse?: string, status?: string } = {}, page: number = 1, limit: number = 10): Promise<any> {
+    const skip = (page - 1) * limit;
+    const query: any = {};
+
+    if (filters.search) {
+      const searchRegex = new RegExp(filters.search, 'i');
+      query.$or = [
+        { title: searchRegex },
+        { companyDescription: searchRegex },
+      ];
+    }
+
+    if (filters.buyerResponse === 'accepted') {
+      query['$expr'] = {
+        '$gt': [
+          {
+            '$size': {
+              '$filter': {
+                input: { '$objectToArray': '$invitationStatus' },
+                as: 'item',
+                cond: { '$eq': ['$$item.v.response', 'accepted'] }
+              }
+            }
+          },
+          0
+        ]
+      };
+      query.status = { $ne: 'completed' }; // Exclude completed deals from active deals
+    }
+
+    if (filters.status) {
+      query.status = filters.status;
+    }
+    const deals = await this.dealModel.find(query).skip(skip).limit(limit).exec();
+    const totalDeals = await this.dealModel.countDocuments(query).exec();
+    return {
+      data: deals,
+      total: totalDeals,
+      page,
+      lastPage: Math.ceil(totalDeals / limit),
+    };
   }
 
   async findBySeller(sellerId: string): Promise<Deal[]> {
