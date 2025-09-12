@@ -1,14 +1,15 @@
-import { Controller, Get, Post, Body, UseGuards, Request, Param, Delete, Patch } from "@nestjs/common"
+import { Controller, Get, Post, Body, UseGuards, Request, Param, Delete, Patch, Query } from "@nestjs/common"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
 import { AdminService } from "./admin.service"
 import { CreateAdminDto } from "./dto/create-admin.dto"
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam } from "@nestjs/swagger"
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery } from "@nestjs/swagger"
 import { CompanyProfileService } from "../company-profile/company-profile.service"
 import { BuyersService } from "../buyers/buyers.service"
 import { UpdateCompanyProfileDto } from "../company-profile/dto/update-company-profile.dto"
 import { UnauthorizedException } from "@nestjs/common"
+import { SellersService } from "../sellers/sellers.service"
 
 interface RequestWithUser extends Request {
   user: {
@@ -25,6 +26,7 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly companyProfileService: CompanyProfileService,
     private readonly buyersService: BuyersService,
+    private readonly sellersService: SellersService,
   ) { }
 
   @Post('register')
@@ -129,8 +131,13 @@ export class AdminController {
   @ApiOperation({ summary: "Get all buyers (admin only)" })
   @ApiResponse({ status: 200, description: "Return all buyers" })
   @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
-  async getAllBuyers() {
-    return this.adminService.getAllBuyers()
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number for pagination' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
+  async getAllBuyers(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return this.adminService.getAllBuyers(page, limit)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -158,5 +165,49 @@ export class AdminController {
   async deleteBuyer(@Param('id') id: string) {
     await this.adminService.deleteBuyer(id);
     return { message: 'Buyer deleted successfully' };
+  }
+
+  // Seller Management for Admins
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("admin")
+  @Get("sellers")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get all sellers (admin only)" })
+  @ApiResponse({ status: 200, description: "Return all sellers" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number for pagination' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
+  async getAllSellers(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return this.adminService.getAllSellers(page, limit)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Get('sellers/:id')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get a seller by ID (admin only)' })
+  @ApiParam({ name: 'id', type: String, description: 'Seller ID' })
+  @ApiResponse({ status: 200, description: 'Return the seller' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires admin role' })
+  @ApiResponse({ status: 404, description: 'Seller not found' })
+  async getSeller(@Param('id') id: string) {
+    return this.sellersService.findById(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Delete('sellers/:id')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete a seller (admin only)' })
+  @ApiParam({ name: 'id', type: String, description: 'Seller ID' })
+  @ApiResponse({ status: 200, description: 'Seller deleted successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires admin role' })
+  @ApiResponse({ status: 404, description: 'Seller not found' })
+  async deleteSeller(@Param('id') id: string) {
+    await this.adminService.deleteSeller(id);
+    return { message: 'Seller deleted successfully' };
   }
 }

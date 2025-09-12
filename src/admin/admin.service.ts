@@ -7,6 +7,19 @@ import { CreateAdminDto } from "./dto/create-admin.dto"
 import { CompanyProfile, type CompanyProfileDocument } from "../company-profile/schemas/company-profile.schema"
 import { Buyer, type BuyerDocument } from "../buyers/schemas/buyer.schema"
 import { UpdateCompanyProfileDto } from "../company-profile/dto/update-company-profile.dto"
+import { BuyersService } from "../buyers/buyers.service"
+import { Seller, SellerDocument } from "../sellers/schemas/seller.schema";
+import { CompanyProfileService } from "../company-profile/company-profile.service";
+import { SellersService } from "../sellers/sellers.service";
+import { forwardRef, Inject } from "@nestjs/common";
+
+interface RequestWithUser extends Request {
+  user: {
+    userId: string
+    email: string
+    role: string
+  }
+}
 
 @Injectable()
 export class AdminService {
@@ -14,6 +27,10 @@ export class AdminService {
     @InjectModel(Admin.name) private adminModel: Model<AdminDocument>,
     @InjectModel(CompanyProfile.name) private companyProfileModel: Model<CompanyProfileDocument>,
     @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
+    @InjectModel(Seller.name) private sellerModel: Model<SellerDocument>,
+    @Inject(forwardRef(() => BuyersService)) private readonly buyersService: BuyersService,
+    @Inject(forwardRef(() => CompanyProfileService)) private readonly companyProfileService: CompanyProfileService,
+    @Inject(forwardRef(() => SellersService)) private readonly sellersService: SellersService,
   ) { }
 
   async create(createAdminDto: CreateAdminDto): Promise<Admin> {
@@ -83,8 +100,8 @@ export class AdminService {
   }
 
   // Buyer Management
-  async getAllBuyers(): Promise<Buyer[]> {
-    return this.buyerModel.find().exec()
+  async getAllBuyers(page: number = 1, limit: number = 10): Promise<any> {
+    return this.buyersService.findAll(page, limit)
   }
 
   async deleteBuyer(id: string): Promise<void> {
@@ -95,5 +112,19 @@ export class AdminService {
 
     // Also delete associated company profile
     await this.companyProfileModel.deleteMany({ buyer: id }).exec()
+  }
+
+  // Seller Management
+  async getAllSellers(page: number = 1, limit: number = 10): Promise<any> {
+    return this.sellersService.findAll(page, limit)
+  }
+
+  async deleteSeller(id: string): Promise<void> {
+    const result = await this.sellerModel.findByIdAndDelete(id).exec();
+    if (!result) {
+      throw new NotFoundException("Seller not found");
+    }
+    // Optionally, delete associated deals or handle them as needed
+    // await this.dealModel.deleteMany({ seller: id }).exec();
   }
 }
