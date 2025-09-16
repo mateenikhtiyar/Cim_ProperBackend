@@ -58,18 +58,18 @@ export class BuyersService {
 
     const profile = buyer.companyProfileId as unknown as CompanyProfileDocument;
     if (!this.isProfileComplete(profile)) {
-      const subject = "Complete Your Company Profile to Get the Best Matching Deals";
+      const subject = 'CIM Amplify can not send you deals until you complete your company profile';
       const emailContent = `
-        <p>We noticed you haven't completed your company profile yet. To ensure you receive the most relevant acquisition opportunities, please take a few minutes to complete your profile.</p>
-        <p>A complete profile helps us match you with deals that fit your specific criteria, including:</p>
-        <ul>
-          <li>Target industries and geographic regions</li>
-          <li>Revenue and EBITDA ranges</li>
-          <li>Transaction size preferences</li>
-          <li>Business model preferences</li>
-        </ul>
-        <p><a href="${process.env.FRONTEND_URL}/buyer/login" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Complete Your Profile Now</a></p>
-        <p>Don't miss out on great opportunities - complete your profile today!</p>
+        <p>If you have run into any issues please reply to this email with what is happening and we will help to solve the problem.</p>
+        <p>If you did not receive a validation email from us please use this link to request a new one: </p>
+        
+        <p><a href="https://app.cimamplify.com/resend-verification" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Resend Verification Email</a></p>
+
+        <p>Then check your inbox or spam for an email from deals@amp-ven.com</p>
+
+        <p style="color: red;"><b>If you don't plan to complete your profile please reply delete to this email and we will remove your registration.</b></p>
+       
+        <p>If you have questions check out our FAQ section at https://cimamplify.com/#FAQs or reply to this email.</p>
       `;
 
       const emailBody = genericEmailTemplate(subject, (buyer.fullName || "").split(" ")[0] || "there", emailContent);
