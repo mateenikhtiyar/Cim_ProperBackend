@@ -67,6 +67,14 @@ export class Buyer {
   @Prop({ default: false })
   isEmailVerified: boolean
 
+  @ApiProperty({ description: "Number of profile completion reminders sent", default: 0 })
+  @Prop({ default: 0 })
+  profileCompletionReminderCount: number;
+
+  @ApiProperty({ description: "Timestamp of the last profile completion reminder sent", nullable: true })
+  @Prop({ default: null })
+  lastProfileCompletionReminderSentAt: Date;
+
   // Ensure Mongoose methods are properly typed
   toObject?(): any
 }
