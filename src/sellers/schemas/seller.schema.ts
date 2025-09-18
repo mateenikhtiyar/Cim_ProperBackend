@@ -12,14 +12,18 @@ export interface SellerDocument extends Seller, Document {
   toJSON: {
     virtuals: true,
     transform: (doc, ret) => {
-      delete ret.password;
+      if ('password' in ret) {
+        delete ret.password;
+      }
       return ret;
     }
   },
   toObject: {
     virtuals: true,
     transform: (doc, ret) => {
-      delete ret.password;
+      if ('password' in ret) {
+        delete ret.password;
+      }
       return ret;
     }
   }
