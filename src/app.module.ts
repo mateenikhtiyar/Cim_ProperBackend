@@ -12,6 +12,7 @@ import { DealsModule } from "deals/deals.module"
 import { DealTrackingModule } from "deal-tracking/deal-tracking.module"
 import { DealsService } from "deals/deals.service"
 import { MailModule } from './mail/mail.module';
+import { ClassificationModule } from './classification/classification.module';
 
 
 import { CronModule } from './cron/cron.module';
@@ -39,6 +40,7 @@ import * as path from 'path';
     DealTrackingModule,
     MailModule,
     CronModule,
+    ClassificationModule,
   ],
   providers: [],
   controllers: [],
