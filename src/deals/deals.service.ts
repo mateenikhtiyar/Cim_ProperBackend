@@ -177,7 +177,7 @@ export class DealsService {
     return this.dealModel
       .find({
         isPublic: true,
-        status: DealStatus.ACTIVE,
+        status: { $ne: DealStatus.COMPLETED },
       })
       .exec()
   }
@@ -192,6 +192,184 @@ export class DealsService {
         ],
       })
       .exec()
+  }
+
+  async requestAccess(dealId: string, buyerId: string): Promise<{ message: string }> {
+    const deal = await this.dealModel.findById(dealId).exec() as DealDocument;
+    if (!deal) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+    if (!deal.isPublic) {
+      throw new ForbiddenException('This deal is not listed in the marketplace');
+    }
+
+    // Add buyer to targetedBuyers so it shows in seller dashboard requests
+    if (!deal.targetedBuyers.map(String).includes(buyerId)) {
+      deal.targetedBuyers.push(buyerId);
+    }
+
+    // Create/update invitationStatus entry as requested (not yet visible to buyer tabs)
+    const current = deal.invitationStatus.get(buyerId);
+    deal.invitationStatus.set(buyerId, {
+      invitedAt: current?.invitedAt || new Date(),
+      respondedAt: current?.respondedAt,
+      response: 'requested',
+      notes: 'Marketplace access requested',
+      decisionBy: undefined,
+    });
+
+    // Log a view interaction for traceability
+    const dealTrackingModel = this.dealModel.db.model('DealTracking');
+    const tracking = new dealTrackingModel({
+      deal: dealId,
+      buyer: buyerId,
+      interactionType: 'view',
+      timestamp: new Date(),
+      notes: 'Marketplace access requested',
+      metadata: { source: 'marketplace' },
+    });
+    await tracking.save();
+
+    deal.timeline.updatedAt = new Date();
+    await deal.save();
+
+    // Notify seller via email
+    const seller = await this.sellerModel.findById(deal.seller).exec();
+    const buyer = await this.buyerModel.findById(buyerId).exec();
+    if (seller && buyer) {
+      const subject = `Marketplace access request for ${deal.title}`;
+      const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
+        <p>${buyer.fullName} at ${buyer.companyName} has requested access to <strong>${deal.title}</strong> from the public marketplace.</p>
+        <p>Buyer contact: ${buyer.email}${buyer.phone ? `, ${buyer.phone}` : ''}</p>
+        <p>You can review requests in your <a href="${process.env.FRONTEND_URL}/seller/login">seller dashboard</a> under this deal and approve to create an introduction.</p>
+      `);
+      await this.mailService.sendEmailWithLogging(
+        seller.email,
+        'seller',
+        subject,
+        htmlBody,
+        [ILLUSTRATION_ATTACHMENT],
+        (deal._id as Types.ObjectId).toString(),
+      );
+    }
+
+    return { message: 'Access request sent to seller' };
+  }
+
+  async approveAccess(dealId: string, sellerId: string, buyerId: string): Promise<any> {
+    const deal = await this.dealModel.findById(dealId).exec() as DealDocument;
+    if (!deal) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+    if (deal.seller.toString() !== sellerId) {
+      throw new ForbiddenException("You don't have permission to approve access for this deal");
+    }
+    // Ensure buyer is targeted (requestAccess should have done this)
+    if (!deal.targetedBuyers.map(String).includes(buyerId)) {
+      deal.targetedBuyers.push(buyerId);
+    }
+    // Mark as pending so it shows in buyer's Pending tab
+    const current = deal.invitationStatus.get(buyerId);
+    deal.invitationStatus.set(buyerId, {
+      invitedAt: current?.invitedAt || new Date(),
+      respondedAt: new Date(),
+      response: 'pending',
+      notes: 'Marketplace access approved by seller',
+      decisionBy: 'seller',
+    });
+
+    // Log interaction
+    const dealTrackingModel = this.dealModel.db.model('DealTracking');
+    const tracking = new dealTrackingModel({
+      deal: dealId,
+      buyer: buyerId,
+      interactionType: 'view',
+      timestamp: new Date(),
+      notes: 'Seller approved marketplace access (pending)',
+      metadata: { source: 'seller-approve' },
+    });
+    await tracking.save();
+
+    deal.timeline.updatedAt = new Date();
+    await deal.save();
+
+    // Optionally notify buyer that they have been approved and can move to active
+    const buyer = await this.buyerModel.findById(buyerId).exec();
+    if (buyer) {
+      const subject = `You have access to ${deal.title}`;
+      const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+        <p>Your access request for <strong>${deal.title}</strong> was approved. The deal is now available in your <a href="${process.env.FRONTEND_URL}/buyer/login">Pending</a> tab. Click <strong>Move to Active</strong> to receive an introduction to the seller.</p>
+      `);
+      await this.mailService.sendEmailWithLogging(
+        buyer.email,
+        'buyer',
+        subject,
+        htmlBody,
+        [ILLUSTRATION_ATTACHMENT],
+        (deal._id as Types.ObjectId).toString(),
+      );
+    }
+
+    return { message: 'Access approved and moved to Pending for buyer' };
+  }
+
+  async denyAccess(dealId: string, sellerId: string, buyerId: string): Promise<any> {
+    const deal = await this.dealModel.findById(dealId).exec() as DealDocument;
+    if (!deal) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+    if (deal.seller.toString() !== sellerId) {
+      throw new ForbiddenException("You don't have permission to deny access for this deal");
+    }
+    // Ensure targeted so it appears in dashboards
+    if (!deal.targetedBuyers.map(String).includes(buyerId)) {
+      deal.targetedBuyers.push(buyerId);
+    }
+    const current = deal.invitationStatus.get(buyerId);
+    deal.invitationStatus.set(buyerId, {
+      invitedAt: current?.invitedAt || new Date(),
+      respondedAt: new Date(),
+      response: 'rejected',
+      notes: 'Marketplace access denied by seller',
+      decisionBy: 'seller',
+    });
+
+    // Track rejection
+    const dealTrackingModel = this.dealModel.db.model('DealTracking');
+    const tracking = new dealTrackingModel({
+      deal: dealId,
+      buyer: buyerId,
+      interactionType: 'rejected',
+      timestamp: new Date(),
+      notes: 'Marketplace access denied by seller',
+      metadata: { source: 'seller-deny' },
+    });
+    await tracking.save();
+
+    // Remove from interested if present
+    deal.interestedBuyers = deal.interestedBuyers.filter((id) => id.toString() !== buyerId);
+    deal.timeline.updatedAt = new Date();
+    await deal.save();
+
+    // Optional: notify buyer
+    const buyer = await this.buyerModel.findById(buyerId).exec();
+    if (buyer) {
+      const subject = `Access request declined for ${deal.title}`;
+      const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+        <p>Your request to access <strong>${deal.title}</strong> has been declined by the seller at this time.</p>
+        <p>You can continue browsing the <a href="${process.env.FRONTEND_URL}/buyer/login">marketplace</a> for other opportunities.</p>
+      `);
+      await this.mailService.sendEmailWithLogging(
+        buyer.email,
+        'buyer',
+        subject,
+        htmlBody,
+        [ILLUSTRATION_ATTACHMENT],
+        (deal._id as Types.ObjectId).toString(),
+      );
+    }
+
+    return { message: 'Access denied', dealId, buyerId };
   }
 
   async addDocuments(dealId: string, documents: DocumentInfo[]): Promise<Deal> {
@@ -267,6 +445,63 @@ export class DealsService {
       }
     }
     const { documents, ...updateDataWithoutDocuments } = updateDealDto;
+
+    // Handle marketplace opt-out flow: if toggling isPublic from true -> false,
+    // decline all outstanding marketplace requests (response === 'requested').
+    if (typeof updateDealDto.isPublic === 'boolean') {
+      const wasPublic = !!deal.isPublic;
+      const willBePublic = !!updateDealDto.isPublic;
+      if (wasPublic && !willBePublic) {
+        const invitationEntries: Array<[string, any]> = deal.invitationStatus instanceof Map
+          ? Array.from(deal.invitationStatus.entries())
+          : Object.entries((deal.invitationStatus as any) || {});
+
+        for (const [buyerId, inv] of invitationEntries) {
+          if (inv?.response === 'requested') {
+            // Mark as rejected by seller and notify
+            deal.invitationStatus.set(buyerId, {
+              invitedAt: inv.invitedAt || new Date(),
+              respondedAt: new Date(),
+              response: 'rejected',
+              notes: 'Marketplace listing removed by seller',
+              decisionBy: 'seller',
+            });
+            // Tracking
+            try {
+              const dealTrackingModel = this.dealModel.db.model('DealTracking');
+              const tracking = new dealTrackingModel({
+                deal: id,
+                buyer: buyerId,
+                interactionType: 'rejected',
+                timestamp: new Date(),
+                notes: 'Listing removed by seller (marketplace opt-out)',
+                metadata: { source: 'marketplace-optout' },
+              });
+              await tracking.save();
+            } catch {}
+            // Email buyer
+            try {
+              const buyer = await this.buyerModel.findById(buyerId).exec();
+              if (buyer) {
+                const subject = `${deal.title} is no longer listed in the marketplace`;
+                const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+                  <p>Your request to access <strong>${deal.title}</strong> is no longer available because the seller removed the listing from the marketplace.</p>
+                  <p>You can continue browsing the <a href="${process.env.FRONTEND_URL}/buyer/login">marketplace</a> for other opportunities.</p>
+                `);
+                await this.mailService.sendEmailWithLogging(
+                  buyer.email,
+                  'buyer',
+                  subject,
+                  htmlBody,
+                  [ILLUSTRATION_ATTACHMENT],
+                  (deal._id as Types.ObjectId).toString(),
+                );
+              }
+            } catch {}
+          }
+        }
+      }
+    }
     // Only update provided fields, do not overwrite required fields with undefined
     for (const [key, value] of Object.entries(updateDataWithoutDocuments)) {
       if (typeof value !== "undefined") {
@@ -1050,6 +1285,7 @@ export class DealsService {
           ...currentInvitation,
           respondedAt: new Date(),
           response: status === "active" ? "accepted" : status,
+          decisionBy: 'buyer',
         })
       }
       const dealTrackingModel = this.dealModel.db.model("DealTracking")
@@ -1109,6 +1345,7 @@ export class DealsService {
         respondedAt: new Date(),
         response: status === "active" ? "accepted" : status,
         notes: notes || "",
+        decisionBy: 'buyer',
       })
 
       // Update interested buyers list
@@ -1238,8 +1475,10 @@ export class DealsService {
         status: { $ne: DealStatus.COMPLETED },
       }, null, queryOptions).exec();
     } else if (status === "rejected") {
+      // Only include deals rejected by the buyer (not seller denials)
       return this.dealModel.find({
         [`invitationStatus.${buyerId}.response`]: "rejected",
+        [`invitationStatus.${buyerId}.decisionBy`]: "buyer",
         status: { $ne: DealStatus.COMPLETED },
       }, null, queryOptions).exec();
     } else if (status === "pending") {
@@ -1534,6 +1773,7 @@ export class DealsService {
             buyersByStatus.active.push(buyerData);
             break;
           case 'pending':
+          case 'requested':
             buyersByStatus.pending.push(buyerData);
             break;
           case 'rejected':
