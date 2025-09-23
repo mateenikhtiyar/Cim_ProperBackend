@@ -55,6 +55,36 @@ interface DocumentInfo {
 export class DealsController {
   constructor(private readonly dealsService: DealsService) { }
 
+  // Marketplace: list public deals (buyer only) with buyer-specific status
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('buyer')
+  @Get('marketplace')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List public marketplace deals with buyer status (buyer only)' })
+  @ApiResponse({ status: 200, description: 'Public deals list with current buyer status' })
+  async listMarketplaceDeals(@Request() req: RequestWithUser) {
+    const buyerId = req.user?.userId;
+    const deals = await this.dealsService.findPublicDeals();
+    return deals.map((d: any) => {
+      // Compute current buyer status for this public deal
+      let currentBuyerStatus: 'none' | 'requested' | 'pending' | 'accepted' | 'rejected' = 'none';
+      let currentBuyerRequested = false;
+      try {
+        const inv = d?.invitationStatus instanceof Map
+          ? d.invitationStatus.get(buyerId)
+          : d?.invitationStatus?.[buyerId];
+        if (inv?.response) currentBuyerStatus = inv.response;
+        currentBuyerRequested = Array.isArray(d?.targetedBuyers) && d.targetedBuyers.map(String).includes(String(buyerId));
+      } catch {}
+      const base = typeof d?.toObject === 'function' ? d.toObject() : (typeof d?.toJSON === 'function' ? d.toJSON() : { ...d });
+      return {
+        ...base,
+        currentBuyerStatus,
+        currentBuyerRequested,
+      };
+    });
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
   @Post()
@@ -270,6 +300,24 @@ export class DealsController {
       uploadedFiles: documentPaths.length,
       documents: documentPaths,
     }
+  }
+
+  // Buyer requests access to a public deal
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('buyer')
+  @Post(':id/request-access')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Request access to a marketplace deal (buyer only)' })
+  @ApiParam({ name: 'id', description: 'Deal ID' })
+  @ApiResponse({ status: 200, description: 'Request sent' })
+  async requestAccess(
+    @Param('id') dealId: string,
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    return this.dealsService.requestAccess(dealId, req.user.userId);
   }
 
 // Place static routes before dynamic routes
@@ -713,6 +761,60 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     }
 
     return this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, body.status, body.notes)
+  }
+
+  // Seller approves a marketplace access request
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post(':id/approve-access')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Approve a buyer access request for this deal (seller only)' })
+  @ApiParam({ name: 'id', description: 'Deal ID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        buyerId: { type: 'string', description: 'Buyer ID to approve' },
+      },
+      required: ['buyerId'],
+    },
+  })
+  async approveAccess(
+    @Param('id') dealId: string,
+    @Body() body: { buyerId: string },
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    return this.dealsService.approveAccess(dealId, req.user.userId, body.buyerId);
+  }
+
+  // Seller denies a marketplace access request
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('seller')
+  @Post(':id/deny-access')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Deny a buyer access request for this deal (seller only)' })
+  @ApiParam({ name: 'id', description: 'Deal ID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        buyerId: { type: 'string', description: 'Buyer ID to deny' },
+      },
+      required: ['buyerId'],
+    },
+  })
+  async denyAccess(
+    @Param('id') dealId: string,
+    @Body() body: { buyerId: string },
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    return this.dealsService.denyAccess(dealId, req.user.userId, body.buyerId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -285,8 +285,9 @@ export class Deal {
     {
       invitedAt: Date
       respondedAt?: Date
-      response: "pending" | "accepted" | "rejected"
+      response: "requested" | "pending" | "accepted" | "rejected"
       notes?: string
+      decisionBy?: "buyer" | "seller"
     }
   >
 
