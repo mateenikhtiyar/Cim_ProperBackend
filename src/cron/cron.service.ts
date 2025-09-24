@@ -24,7 +24,7 @@ export class CronService {
     @InjectModel(Buyer.name) private buyerModel: Model<BuyerDocument>,
     @InjectModel(CompanyProfile.name) private companyProfileModel: Model<CompanyProfileDocument>,
     @InjectModel(EmailVerification.name) private emailVerificationModel: Model<EmailVerificationDocument>,
-  ) {}
+  ) { }
 
 
   private isProfileComplete(profile: CompanyProfile): boolean {
@@ -82,7 +82,7 @@ export class CronService {
           <p>If you have run into any issues please reply to this email with what is happening and we will help to solve the problem.</p>
           <p>If you did not receive a validation email from us please use this link to request a new one: </p>
           
-          <p><a href="http://localhost:3000/resend-verification" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Resend Verification Email</a></p>
+          <p><a href="https://app.cimamplify.com/resend-verification" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Resend Verification Email</a></p>
 
           <p>Then check your inbox or spam for an email from deals@amp-ven.com</p>
 
@@ -177,12 +177,12 @@ export class CronService {
         const emailBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
 
         await this.mailService.sendEmailWithLogging(
-            buyer.email,
-            'buyer',
-            subject,
-            emailBody,
-            [ILLUSTRATION_ATTACHMENT],
-            );
+          buyer.email,
+          'buyer',
+          subject,
+          emailBody,
+          [ILLUSTRATION_ATTACHMENT],
+        );
       }
     }
   }
@@ -201,12 +201,12 @@ export class CronService {
       const emailBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
 
       await this.mailService.sendEmailWithLogging(
-          buyer.email,
-          'buyer',
-          subject,
-          emailBody,
-          [ILLUSTRATION_ATTACHMENT],
-          );
+        buyer.email,
+        'buyer',
+        subject,
+        emailBody,
+        [ILLUSTRATION_ATTACHMENT],
+      );
     }
   }
 
