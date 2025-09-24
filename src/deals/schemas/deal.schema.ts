@@ -275,10 +275,11 @@ export class Deal {
     of: {
       invitedAt: Date,
       respondedAt: Date,
-      response: String,
+      response: { type: String, enum: ["requested", "pending", "accepted", "rejected"] },
       notes: String,
+      decisionBy: { type: String, enum: ["buyer", "seller"] },
     },
-    default: new Map(),
+    default: () => new Map(),
   })
   invitationStatus!: Map<
     string,

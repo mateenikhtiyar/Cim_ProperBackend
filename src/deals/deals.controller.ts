@@ -65,24 +65,31 @@ export class DealsController {
   async listMarketplaceDeals(@Request() req: RequestWithUser) {
     const buyerId = req.user?.userId;
     const deals = await this.dealsService.findPublicDeals();
-    return deals.map((d: any) => {
-      // Compute current buyer status for this public deal
+    const results: any[] = [];
+    for (const d of deals) {
       let currentBuyerStatus: 'none' | 'requested' | 'pending' | 'accepted' | 'rejected' = 'none';
       let currentBuyerRequested = false;
       try {
-        const inv = d?.invitationStatus instanceof Map
+        const invitation = d?.invitationStatus instanceof Map
           ? d.invitationStatus.get(buyerId)
           : d?.invitationStatus?.[buyerId];
-        if (inv?.response) currentBuyerStatus = inv.response;
+        if (invitation?.response) {
+          currentBuyerStatus = invitation.response;
+        }
         currentBuyerRequested = Array.isArray(d?.targetedBuyers) && d.targetedBuyers.map(String).includes(String(buyerId));
       } catch {}
-      const base = typeof d?.toObject === 'function' ? d.toObject() : (typeof d?.toJSON === 'function' ? d.toJSON() : { ...d });
-      return {
+      if (currentBuyerStatus === 'pending' || currentBuyerStatus === 'accepted' || currentBuyerStatus === 'rejected') {
+        continue;
+      }
+      const doc: any = d as any;
+      const base = typeof doc?.toObject === 'function' ? doc.toObject() : (typeof doc?.toJSON === 'function' ? doc.toJSON() : { ...doc });
+      results.push({
         ...base,
         currentBuyerStatus,
         currentBuyerRequested,
-      };
-    });
+      });
+    }
+    return results;
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
