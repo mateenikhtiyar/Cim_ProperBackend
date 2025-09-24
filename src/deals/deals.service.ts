@@ -212,10 +212,10 @@ export class DealsService {
     const current = deal.invitationStatus.get(buyerId);
     deal.invitationStatus.set(buyerId, {
       invitedAt: current?.invitedAt || new Date(),
-      respondedAt: current?.respondedAt,
+      respondedAt: new Date(),
       response: 'requested',
       notes: 'Marketplace access requested',
-      decisionBy: undefined,
+      decisionBy: 'buyer',
     });
 
     // Log a view interaction for traceability
@@ -240,8 +240,7 @@ export class DealsService {
       const subject = `Marketplace access request for ${deal.title}`;
       const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
         <p>${buyer.fullName} at ${buyer.companyName} has requested access to <strong>${deal.title}</strong> from the public marketplace.</p>
-        <p>Buyer contact: ${buyer.email}${buyer.phone ? `, ${buyer.phone}` : ''}</p>
-        <p>You can review requests in your <a href="${process.env.FRONTEND_URL}/seller/login">seller dashboard</a> under this deal and approve to create an introduction.</p>
+        <p>To review this request login to your dashboard and Click on Activity for this deal.</p>
       `);
       await this.mailService.sendEmailWithLogging(
         seller.email,
@@ -296,9 +295,9 @@ export class DealsService {
     // Optionally notify buyer that they have been approved and can move to active
     const buyer = await this.buyerModel.findById(buyerId).exec();
     if (buyer) {
-      const subject = `You have access to ${deal.title}`;
+      const subject = `You have access to the Marketplace deal`;
       const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-        <p>Your access request for <strong>${deal.title}</strong> was approved. The deal is now available in your <a href="${process.env.FRONTEND_URL}/buyer/login">Pending</a> tab. Click <strong>Move to Active</strong> to receive an introduction to the seller.</p>
+        <p>Your access request for the Marketplace deal was approved. The deal is now available in your <a href="${process.env.FRONTEND_URL}/buyer/login">Pending</a> tab. Click <strong>Move to Active</strong> to receive an introduction to the seller.</p>
       `);
       await this.mailService.sendEmailWithLogging(
         buyer.email,
@@ -354,9 +353,9 @@ export class DealsService {
     // Optional: notify buyer
     const buyer = await this.buyerModel.findById(buyerId).exec();
     if (buyer) {
-      const subject = `Access request declined for ${deal.title}`;
+      const subject = `Access request declined for Marketplace deal`;
       const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-        <p>Your request to access <strong>${deal.title}</strong> has been declined by the seller at this time.</p>
+        <p>Your request to access the marketplace deal has been declined by the seller at this time.</p>
         <p>You can continue browsing the <a href="${process.env.FRONTEND_URL}/buyer/login">marketplace</a> for other opportunities.</p>
       `);
       await this.mailService.sendEmailWithLogging(
@@ -1416,15 +1415,9 @@ export class DealsService {
 
           const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
           const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
-            <p>Thank you for accepting an introduction to <strong>${dealDoc.title}</strong>. We have notified <strong>${seller.fullName}</strong> at <strong>${seller.companyName}</strong>. They will follow up with their NDA and the next steps.</p>
-            <p>
-              <strong>Seller contact</strong><br>
-              ${seller.fullName}<br>
-              ${seller.companyName}<br>
-              ${seller.email}<br>
-              ${seller.website}
-            </p>
-            <p>If you don’t hear back within 2 business days, reply to this email and our team will assist. You can also access this deal from your <a href="${process.env.FRONTEND_URL}/buyer/login">buyer dashboard</a>.</p>
+            <p>Thank you for accepting an introduction to <strong>${dealDoc.title}</strong>. We've notified the seller and will keep you updated inside CIM Amplify.</p>
+            <p>You can review next steps from your <a href="${process.env.FRONTEND_URL}/buyer/login">buyer dashboard</a>. We'll alert you as soon as the seller responds.</p>
+            <p>If you don’t hear back within 2 business days, reply to this email and our team will assist.</p>
           `);
           await this.mailService.sendEmailWithLogging(
             buyer.email,
@@ -1475,12 +1468,18 @@ export class DealsService {
         status: { $ne: DealStatus.COMPLETED },
       }, null, queryOptions).exec();
     } else if (status === "rejected") {
-      // Only include deals rejected by the buyer (not seller denials)
-      return this.dealModel.find({
-        [`invitationStatus.${buyerId}.response`]: "rejected",
-        [`invitationStatus.${buyerId}.decisionBy`]: "buyer",
+      const responsePath = `invitationStatus.${buyerId}.response`;
+      const decisionByPath = `invitationStatus.${buyerId}.decisionBy`;
+      const filter: Record<string, any> = {
+        [responsePath]: "rejected",
         status: { $ne: DealStatus.COMPLETED },
-      }, null, queryOptions).exec();
+      };
+      filter.$or = [
+        { [decisionByPath]: "buyer" },
+        { [decisionByPath]: { $exists: false } },
+        { [decisionByPath]: null },
+      ];
+      return this.dealModel.find(filter, null, queryOptions).exec();
     } else if (status === "pending") {
       return this.dealModel.find({
         [`invitationStatus.${buyerId}.response`]: "pending",
