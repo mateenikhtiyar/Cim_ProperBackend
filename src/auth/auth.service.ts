@@ -10,7 +10,7 @@ import { GoogleSellerLoginResult } from "./interfaces/google-seller-login-result
 import { Buyer, BuyerDocument } from '../buyers/schemas/buyer.schema';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { MailService } from '../mail/mail.service';
+import { ILLUSTRATION_ATTACHMENT, MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config'
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Seller } from '../sellers/schemas/seller.schema';
@@ -18,9 +18,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { EmailVerification, EmailVerificationDocument } from './schemas/email-verification.schema';
 import { User, User as UserType } from './interfaces/user.interface'; // create if missing
 import { genericEmailTemplate } from '../mail/generic-email.template';
-import { join } from 'path';
 
 
+type VerificationEmailContext = 'initial' | 'resend' | 'login-reminder';
+
+interface VerificationEmailCopy {
+  subject: string;
+  title: string;
+  body: string;
+}
 
 @Injectable()
 export class AuthService {
@@ -65,6 +71,16 @@ export class AuthService {
       if (user && (await bcrypt.compare(password, user.password))) {
         // Admin users don't have an isEmailVerified property
         if (userType !== 'admin' && !user.isEmailVerified) {
+          if (userType === 'buyer') {
+            try {
+              await this.sendVerificationEmail(user, { context: 'login-reminder' });
+            } catch (sendError) {
+              this.logger.error(
+                `Failed to send login reminder verification email to ${user.email}: ${sendError.message}`,
+                sendError.stack,
+              );
+            }
+          }
           throw new UnauthorizedException('Please verify your email before logging in.');
         }
         const result = user.toObject ? user.toObject() : { ...user };
@@ -354,8 +370,18 @@ async resetPasswordSeller(dto: ResetPasswordDto) {
 
 
 
-async sendVerificationEmail(user: User) {
-  this.logger.debug(`Preparing to send verification email for user: ${user.email}`);
+async sendVerificationEmail(user: User, options: { context?: VerificationEmailContext } = {}) {
+  const context = options.context ?? 'initial';
+  this.logger.debug(`Preparing to send verification email (context: ${context}) for user: ${user.email}`);
+
+  if (context !== 'initial') {
+    const updateResult = await this.emailVerificationModel.updateMany(
+      { userId: user._id, isUsed: false },
+      { $set: { isUsed: true } },
+    ).exec();
+    this.logger.debug(`Invalidated ${updateResult.modifiedCount ?? 0} previous verification tokens for user: ${user._id}`);
+  }
+
   const token = uuidv4();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
@@ -372,38 +398,73 @@ async sendVerificationEmail(user: User) {
   const verificationLink = `${process.env.BACKEND_URL}/auth/verify-email?token=${token}`;
   this.logger.debug(`Verification link: ${verificationLink}`);
 
-  const emailContent = `
-    <p>Thank you for registering with CIM Amplify! To complete your registration and activate your account, please verify your email address by clicking the link below:</p>
-    <table border="0" cellpadding="0" cellspacing="0" style="margin: 24px 0;">
-        <tr>
-            <td align="center" style="border-radius: 5px; background-color: #3aafa9;">
-                <a href="${verificationLink}" target="_blank" style="font-size: 16px; color: #ffffff; text-decoration: none; padding: 12px 25px; border-radius: 5px; display: inline-block;">Verify Your Email Address</a>
-            </td>
-        </tr>
-    </table>
-    <p>This link is valid for 24 hours. If you did not register for an account with CIM Amplify, please disregard this email.</p>
-    <p>We look forward to helping you with your deal-making.</p>
-  `;
-
-  const emailBody = genericEmailTemplate('CIM Amplify Verification', user.fullName, emailContent);
-
-  const attachments = [
-    {
-      filename: 'illustration.png',
-      path: join(process.cwd(), 'assets', 'illustration.png'),
-      cid: 'illustration',
-    },
-  ];
+  const copy = this.buildVerificationEmailContent(context, verificationLink);
+  const recipientName = user.fullName || user.email;
+  const emailBody = genericEmailTemplate(copy.title, recipientName, copy.body);
+  const recipientType = this.resolveRecipientType(user);
 
   await this.mailService.sendEmailWithLogging(
     user.email,
-    'buyer',  // or 'seller' depending on user type
-    'CIM Amplify Verification',
+    recipientType,
+    copy.subject,
     emailBody,
-    attachments,
+    [ILLUSTRATION_ATTACHMENT],
   );
-  this.logger.debug(`Called mailService.sendEmailWithLogging for ${user.email}`);
+  this.logger.debug(`Triggered verification email (context: ${context}) for ${user.email}`);
 }
+
+  private resolveRecipientType(user: User): string {
+    if (user?.role === 'seller') {
+      return 'seller';
+    }
+
+    if (user?.role === 'admin') {
+      return 'admin';
+    }
+
+    return 'buyer';
+  }
+
+  private buildVerificationEmailContent(context: VerificationEmailContext, verificationLink: string): VerificationEmailCopy {
+    const buttonMarkup = `
+      <table border="0" cellpadding="0" cellspacing="0" style="margin: 24px 0;">
+          <tr>
+              <td align="center" style="border-radius: 5px; background-color: #3aafa9;">
+                  <a href="${verificationLink}" target="_blank" style="font-size: 16px; color: #ffffff; text-decoration: none; padding: 12px 25px; border-radius: 5px; display: inline-block;">Verify Your Email Address</a>
+              </td>
+          </tr>
+      </table>
+    `.trim();
+
+    if (context === 'login-reminder') {
+      return {
+        subject: 'Verify your email to access CIM Amplify',
+        title: 'Verify Your Email to Access CIM Amplify',
+        body: `
+          <p>We noticed you tried to sign in, but your email hasn't been verified yet.</p>
+          ${buttonMarkup}
+          <p>Once your email is confirmed, you can log back in and start exploring your dashboard.</p>
+          <p>If you didn't try to log in, you can ignore this message.</p>
+        `.trim(),
+      };
+    }
+
+    const intro = context === 'resend'
+      ? `<p>Here's a fresh link to verify your CIM Amplify account. Please confirm your email by clicking below:</p>`
+      : `<p>Thank you for registering with CIM Amplify! To complete your registration and activate your account, please verify your email address by clicking the link below:</p>`;
+
+    return {
+      subject: 'CIM Amplify Verification',
+      title: 'CIM Amplify Verification',
+      body: `
+        ${intro}
+        ${buttonMarkup}
+        <p>This link is valid for 24 hours. If you did not register for an account with CIM Amplify, please disregard this email.</p>
+        <p>We look forward to helping you with your deal-making.</p>
+      `.trim(),
+    };
+  }
+
 async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string; userId?: string; fullName?: string }> {
   this.logger.debug(`Attempting to verify token: ${token}`);
   const emailVerification = await this.emailVerificationModel.findOne({ token }).exec();
@@ -490,7 +551,7 @@ async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string
     this.logger.debug(`Invalidated ${updateResult.modifiedCount} old verification tokens for user ${user._id}`);
 
     // Generate a new token and send email
-    await this.sendVerificationEmail(user);
+    await this.sendVerificationEmail(user, { context: 'resend' });
     this.logger.debug(`New verification email triggered for ${user.email}`);
 
     return 'Verification email resent successfully.';
