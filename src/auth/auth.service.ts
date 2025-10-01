@@ -71,17 +71,19 @@ export class AuthService {
       if (user && (await bcrypt.compare(password, user.password))) {
         // Admin users don't have an isEmailVerified property
         if (userType !== 'admin' && !user.isEmailVerified) {
-          if (userType === 'buyer') {
-            try {
-              await this.sendVerificationEmail(user, { context: 'login-reminder' });
-            } catch (sendError) {
-              this.logger.error(
-                `Failed to send login reminder verification email to ${user.email}: ${sendError.message}`,
-                sendError.stack,
-              );
-            }
+          this.logger.log(`User ${user.email} attempted login but email not verified. Sending reminder...`);
+          
+          try {
+            await this.sendVerificationEmail(user, { context: 'login-reminder' });
+            this.logger.log(`Login reminder verification email sent to ${user.email}`);
+          } catch (sendError) {
+            this.logger.error(
+              `Failed to send login reminder verification email to ${user.email}: ${sendError.message}`,
+              sendError.stack,
+            );
           }
-          throw new UnauthorizedException('Please verify your email before logging in.');
+          
+          throw new UnauthorizedException('Please verify your email before logging in. A verification email has been sent to your inbox.');
         }
         const result = user.toObject ? user.toObject() : { ...user };
         delete result.password;

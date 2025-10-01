@@ -38,18 +38,33 @@ export class SellersService {
     }
   }
 
-  async findAll(page: number = 1, limit: number = 10): Promise<any> {
+  async findAll(page: number = 1, limit: number = 10, search: string = '', sortBy: string = ''): Promise<any> {
     try {
       const skip = (page - 1) * limit;
+      
+      // Build search query
+      const searchQuery = search ? {
+        $or: [
+          { fullName: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } },
+          { companyName: { $regex: search, $options: 'i' } },
+          { phoneNumber: { $regex: search, $options: 'i' } }
+        ]
+      } : {};
+
+      // Use aggregation pipeline for consistent results
       const pipeline = [
+        { $match: searchQuery },
         {
-          $lookup: {
-            from: 'deals',
-            localField: '_id',
-            foreignField: 'seller',
-            as: 'deals',
-          },
+          $addFields: {
+            sortKey: { $toLower: '$companyName' }
+          }
         },
+        {
+          $sort: { sortKey: 1, _id: 1 }
+        },
+        { $skip: skip },
+        { $limit: limit },
         {
           $project: {
             companyName: 1,
@@ -60,55 +75,17 @@ export class SellersService {
             title: 1,
             role: 1,
             profilePicture: 1,
-            activeDealsCount: {
-              $size: {
-                $filter: {
-                  input: '$deals',
-                  as: 'deal',
-                  cond: {
-                    $gt: [
-                      {
-                        $size: {
-                          $filter: {
-                            input: { $objectToArray: '$$deal.invitationStatus' },
-                            as: 'status',
-                            cond: { $eq: ['$$status.v.response', 'accepted'] },
-                          },
-                        },
-                      },
-                      0,
-                    ],
-                  },
-                },
-              },
-            },
-            offMarketDealsCount: {
-              $size: {
-                $filter: {
-                  input: '$deals',
-                  as: 'deal',
-                  cond: { $eq: ['$$deal.status', 'completed'] },
-                },
-              },
-            },
-          },
-        },
+            createdAt: 1
+          }
+        }
       ];
 
-      const sellers = await this.sellerModel.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]).exec();
-      const totalSellers = await this.sellerModel.aggregate([...pipeline, { $count: 'total' }]).exec();
-      const total = totalSellers.length > 0 ? totalSellers[0].total : 0;
-
-      this.logger.debug(`Fetched ${sellers.length} sellers with deal counts`);
-      this.logger.debug(`Seller deal counts: ${JSON.stringify(sellers.map(s => ({
-        email: s.email,
-        activeDealsCount: s.activeDealsCount,
-        offMarketDealsCount: s.offMarketDealsCount,
-      })))}`);
+      const sellers = await this.sellerModel.aggregate(pipeline).exec();
+      const total = await this.sellerModel.countDocuments(searchQuery).exec();
 
       return {
         data: sellers,
-        total: total,
+        total,
         page,
         lastPage: Math.ceil(total / limit),
       };
