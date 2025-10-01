@@ -133,11 +133,33 @@ export class AdminController {
   @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number for pagination' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search term' })
+  @ApiQuery({ name: 'sortBy', required: false, type: String, description: 'Sort by field:order (e.g., companyName:asc)' })
   async getAllBuyers(
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
+    @Query('search') search: string = '',
+    @Query('sortBy') sortBy: string = '',
   ) {
-    return this.adminService.getAllBuyers(page, limit)
+    return this.adminService.getAllBuyers(page, limit, search, sortBy)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("admin")
+  @Get("buyers/incomplete-profiles")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get buyers with incomplete profiles (admin only)" })
+  @ApiResponse({ status: 200, description: "Return buyers with incomplete profiles" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number for pagination' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search term' })
+  async getBuyersWithIncompleteProfiles(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+    @Query('search') search: string = '',
+  ) {
+    return this.adminService.getBuyersWithIncompleteProfiles(page, limit, search)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -177,11 +199,15 @@ export class AdminController {
   @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number for pagination' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search term' })
+  @ApiQuery({ name: 'sortBy', required: false, type: String, description: 'Sort by field:order (e.g., companyName:asc)' })
   async getAllSellers(
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
+    @Query('search') search: string = '',
+    @Query('sortBy') sortBy: string = '',
   ) {
-    return this.adminService.getAllSellers(page, limit)
+    return this.adminService.getAllSellers(page, limit, search, sortBy)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -210,4 +236,6 @@ export class AdminController {
     await this.adminService.deleteSeller(id);
     return { message: 'Seller deleted successfully' };
   }
+
+
 }

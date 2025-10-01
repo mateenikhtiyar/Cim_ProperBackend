@@ -100,8 +100,70 @@ export class AdminService {
   }
 
   // Buyer Management
-  async getAllBuyers(page: number = 1, limit: number = 10): Promise<any> {
-    return this.buyersService.findAll(page, limit)
+  async getAllBuyers(page: number = 1, limit: number = 10, search: string = '', sortBy: string = ''): Promise<any> {
+    return this.buyersService.findAll(page, limit, search, sortBy)
+  }
+
+  private isProfileComplete(profile: any): boolean {
+    return !!(
+      profile.companyName &&
+      profile.companyName !== "Set your company name" &&
+      profile.website &&
+      profile.companyType &&
+      profile.companyType !== "Other" &&
+      profile.capitalEntity &&
+      profile.dealsCompletedLast5Years !== undefined &&
+      profile.averageDealSize !== undefined &&
+      profile.targetCriteria?.countries?.length > 0 &&
+      profile.targetCriteria?.industrySectors?.length > 0 &&
+      profile.targetCriteria?.revenueMin !== undefined &&
+      profile.targetCriteria?.revenueMax !== undefined &&
+      profile.targetCriteria?.ebitdaMin !== undefined &&
+      profile.targetCriteria?.ebitdaMax !== undefined &&
+      profile.targetCriteria?.transactionSizeMin !== undefined &&
+      profile.targetCriteria?.transactionSizeMax !== undefined &&
+      profile.targetCriteria?.revenueGrowth !== undefined &&
+      profile.targetCriteria?.minYearsInBusiness !== undefined &&
+      profile.targetCriteria?.preferredBusinessModels?.length > 0 &&
+      profile.targetCriteria?.description &&
+      profile.agreements?.feeAgreementAccepted
+    );
+  }
+
+  async getBuyersWithIncompleteProfiles(page: number = 1, limit: number = 10, search: string = ''): Promise<any> {
+    const skip = (page - 1) * limit;
+    
+    // Build search query
+    const searchQuery = search ? {
+      $or: [
+        { fullName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { companyName: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ]
+    } : {};
+    
+    // Get buyers with search filter and profiles to check completeness
+    const allBuyers = await this.buyerModel.find(searchQuery).populate('companyProfileId').exec();
+    
+    const incompleteBuyers = allBuyers.filter(buyer => {
+      if (!buyer.companyProfileId) return true;
+      return !this.isProfileComplete(buyer.companyProfileId);
+    });
+
+    // Apply pagination to filtered results
+    const paginatedBuyers = incompleteBuyers.slice(skip, skip + limit);
+
+    return {
+      data: paginatedBuyers.map((buyer: any) => ({
+        ...buyer.toObject(),
+        companyProfile: buyer.companyProfileId,
+      })),
+      total: incompleteBuyers.length,
+      page,
+      limit,
+      totalPages: Math.ceil(incompleteBuyers.length / limit)
+    };
   }
 
   async deleteBuyer(id: string): Promise<void> {
@@ -115,8 +177,8 @@ export class AdminService {
   }
 
   // Seller Management
-  async getAllSellers(page: number = 1, limit: number = 10): Promise<any> {
-    return this.sellersService.findAll(page, limit)
+  async getAllSellers(page: number = 1, limit: number = 10, search: string = '', sortBy: string = ''): Promise<any> {
+    return this.sellersService.findAll(page, limit, search, sortBy)
   }
 
   async deleteSeller(id: string): Promise<void> {
