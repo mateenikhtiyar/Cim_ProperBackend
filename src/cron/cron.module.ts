@@ -21,5 +21,6 @@ import { CompanyProfile, CompanyProfileSchema } from '../company-profile/schemas
     ]),
   ],
   providers: [CronService],
+  exports: [CronService],
 })
 export class CronModule {}

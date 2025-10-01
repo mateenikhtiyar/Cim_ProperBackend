@@ -82,10 +82,15 @@ export class DealsService {
       }
 
       // Send email to project owner
-      const ownerSubject = `New Deal (${savedDeal.title})`;
+      const ownerSubject = `New Deal - ${savedDeal.title}`;
+      const ownerHeading = `New Deal: <strong>${savedDeal.title}</strong>`;
       const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(savedDeal.financialDetails?.trailingRevenueAmount || 0);
       const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(savedDeal.financialDetails?.trailingEBITDAAmount || 0);
-      const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
+      const sellerNameForOwner = seller?.fullName || 'Not provided';
+      const sellerEmailForOwner = seller?.email || 'Not provided';
+      const ownerHtmlBody = genericEmailTemplate(ownerHeading, 'John', `
+        <p><b>Seller Name</b>: ${sellerNameForOwner}</p>
+        <p><b>Seller Email</b>: ${sellerEmailForOwner}</p>
         <p><b>Description</b>: ${savedDeal.companyDescription}</p>
         <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
         <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
@@ -1417,7 +1422,7 @@ export class DealsService {
           const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
             <p>Thank you for accepting an introduction to <strong>${dealDoc.title}</strong>. We've notified the seller and will keep you updated inside CIM Amplify.</p>
             <p>You can review next steps from your <a href="${process.env.FRONTEND_URL}/buyer/login">buyer dashboard</a>. We'll alert you as soon as the seller responds.</p>
-            <p>If you don’t hear back within 2 business days, reply to this email and our team will assist.</p>
+            <p>If you don't hear back within 2 business days, reply to this email and our team will assist.</p>
           `);
           await this.mailService.sendEmailWithLogging(
             buyer.email,

@@ -16,6 +16,7 @@ import { ClassificationModule } from './classification/classification.module';
 
 
 import { CronModule } from './cron/cron.module';
+import { TestModule } from './test/test.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import * as path from 'path';
 
@@ -40,6 +41,7 @@ import * as path from 'path';
     DealTrackingModule,
     MailModule,
     CronModule,
+    TestModule,
     ClassificationModule,
   ],
   providers: [],
