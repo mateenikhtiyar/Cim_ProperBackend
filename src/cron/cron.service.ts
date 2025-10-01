@@ -110,6 +110,18 @@ export class CronService {
     }
   }
 
+  // Manual trigger for testing
+  async testProfileCompletionReminder() {
+    this.logger.log('MANUAL TEST: Running profile completion reminder');
+    await this.handleProfileCompletionReminder();
+  }
+
+  // Test cron job that runs every 5 minutes for debugging
+  @Cron('*/5 * * * *')
+  async testCronIsWorking() {
+    this.logger.log(`✓ Cron system is working - ${new Date().toISOString()}`);
+  }
+
   @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
   async handleMonthlySellerActivitySummary() {
     this.logger.log('Running monthly seller activity summary cron job');

@@ -135,29 +135,120 @@ export class BuyersService {
     return savedBuyer;
   }
 
-  async findAll(page = 1, limit = 10): Promise<any> {
+  async findAll(page = 1, limit = 10, search = '', sortBy = ''): Promise<any> {
     const skip = (page - 1) * limit;
-    const buyers = await this.buyerModel
-      .find()
-      .populate("companyProfileId")
-      .skip(skip)
-      .limit(limit)
-      .lean()
-      .exec();
+    
+    // Build search query
+    const searchQuery = search ? {
+      $or: [
+        { fullName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { companyName: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ]
+    } : {};
 
-    const totalBuyers = await this.buyerModel.countDocuments().exec();
+    // Check if sorting by deal counts
+    const isDealSort = sortBy && (sortBy.includes('activeDeals') || sortBy.includes('pendingDeals') || sortBy.includes('rejectedDeals'));
+    
+    if (isDealSort) {
+      // Use aggregation for deal sorting
+      const [field, order] = sortBy.split(':');
+      const dealStatus = field === 'activeDeals' ? 'active' : field === 'pendingDeals' ? 'pending' : 'rejected';
+      
+      const pipeline = [
+        { $match: searchQuery },
+        {
+          $lookup: {
+            from: 'deals',
+            let: { buyerId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $in: ['$$buyerId', { $map: { input: { $objectToArray: '$invitationStatus' }, as: 'item', in: '$$item.k' } }] },
+                      { $eq: [{ $getField: { field: 'response', input: { $arrayElemAt: [{ $objectToArray: '$invitationStatus' }, { $indexOfArray: [{ $map: { input: { $objectToArray: '$invitationStatus' }, as: 'item', in: '$$item.k' } }, '$$buyerId'] }] } } }, dealStatus] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'deals'
+          }
+        },
+        {
+          $addFields: {
+            dealCount: { $size: '$deals' }
+          }
+        },
+        {
+          $sort: { dealCount: order === 'desc' ? -1 as const : 1 as const, _id: 1 as const }
+        },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'companyprofiles',
+            localField: 'companyProfileId',
+            foreignField: '_id',
+            as: 'companyProfileId'
+          }
+        },
+        {
+          $addFields: {
+            companyProfileId: { $arrayElemAt: ['$companyProfileId', 0] }
+          }
+        }
+      ];
+      
+      const buyers = await this.buyerModel.aggregate(pipeline).exec();
+      const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
+      
+      const mappedBuyers = buyers.map((buyer: any) => ({
+        ...buyer,
+        companyProfile: buyer.companyProfileId,
+      }));
+      
+      return {
+        data: mappedBuyers,
+        total: totalBuyers,
+        page,
+        lastPage: Math.ceil(totalBuyers / limit),
+      };
+    } else {
+      // Regular sorting for other fields
+      let sortQuery: any = { _id: 1 }; // Default stable sort
+      if (sortBy && sortBy.includes(':')) {
+        const [field, order] = sortBy.split(':');
+        if (field && order) {
+          sortQuery = { [field]: order === 'desc' ? -1 : 1, _id: 1 };
+        }
+      }
 
-    const mappedBuyers = buyers.map((buyer: any) => ({
-      ...buyer,
-      companyProfile: buyer.companyProfileId,
-    }));
+      const buyers = await this.buyerModel
+        .find(searchQuery)
+        .populate("companyProfileId")
+        .sort(sortQuery)
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .exec();
 
-    return {
-      data: mappedBuyers,
-      total: totalBuyers,
-      page,
-      lastPage: Math.ceil(totalBuyers / limit),
-    };
+      const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
+
+      const mappedBuyers = buyers.map((buyer: any) => ({
+        ...buyer,
+        companyProfile: buyer.companyProfileId,
+      }));
+
+      return {
+        data: mappedBuyers,
+        total: totalBuyers,
+        page,
+        lastPage: Math.ceil(totalBuyers / limit),
+      };
+    }
   }
 
   async findOne(id: string): Promise<Buyer> {
