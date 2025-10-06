@@ -61,7 +61,7 @@ export class SellersService {
           }
         },
         {
-          $sort: { sortKey: 1, _id: 1 }
+          $sort: { sortKey: 1 as const, _id: 1 as const }
         },
         { $skip: skip },
         { $limit: limit },
