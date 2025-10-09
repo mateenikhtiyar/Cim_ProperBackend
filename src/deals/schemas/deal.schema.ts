@@ -315,6 +315,10 @@ export class Deal {
   @ApiProperty({ description: "The email of the buyer the deal was closed with, if from CIM Amplify", required: false })
   @Prop({ required: false })
   closedWithBuyerEmail?: string;
+
+  @ApiProperty({ description: "Flag to hide deal guidelines modal for the user", default: false })
+  @Prop({ default: false })
+  hideGuidelines?: boolean;
 }
 
 export const DealSchema = SchemaFactory.createForClass(Deal)
