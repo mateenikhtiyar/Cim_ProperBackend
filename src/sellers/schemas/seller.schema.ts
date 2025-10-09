@@ -89,6 +89,10 @@ export class Seller {
   @Prop({ default: false })
   isEmailVerified: boolean
 
+  @ApiProperty({ description: "Whether to hide deal guidelines modal", default: false })
+  @Prop({ default: false })
+  hideGuidelines: boolean
+
   // Add any additional fields needed
 
   // Ensure Mongoose methods are properly typed
