@@ -155,4 +155,9 @@ export class UpdateDealDto {
   @IsNumber()
   @IsOptional()
   finalSalePrice?: number
+
+  @ApiProperty({ description: "Flag to hide deal guidelines modal for the user", default: false, required: false })
+  @IsBoolean()
+  @IsOptional()
+  hideGuidelines?: boolean;
 }

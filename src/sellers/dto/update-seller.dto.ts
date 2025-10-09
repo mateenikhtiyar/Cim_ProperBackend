@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEmail, IsOptional, IsString, IsUrl, MinLength } from "class-validator";
+import { IsBoolean, IsEmail, IsOptional, IsString, IsUrl, MinLength } from "class-validator";
 
 export class UpdateSellerDto {
   @ApiPropertyOptional({
@@ -64,4 +64,9 @@ export class UpdateSellerDto {
   @IsOptional()
   @IsString()
   managementPreferences?: string;
+
+  @ApiPropertyOptional({ example: false, description: "Whether to hide deal guidelines modal" })
+  @IsOptional()
+  @IsBoolean()
+  hideGuidelines?: boolean;
 }
