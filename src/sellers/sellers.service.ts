@@ -38,7 +38,7 @@ export class SellersService {
     }
   }
 
-  async findAll(page: number = 1, limit: number = 10, search: string = '', sortBy: string = ''): Promise<any> {
+  async findAll(page: number = 1, limit: number = 10, search: string = '', sortBy: string = '', activeOnly: string = ''): Promise<any> {
     try {
       const skip = (page - 1) * limit;
       
@@ -52,17 +52,89 @@ export class SellersService {
         ]
       } : {};
 
-      // Use aggregation pipeline for consistent results
-      const pipeline = [
+      // Use aggregation pipeline to include deal counts
+      const [sortField, sortDirection] = (sortBy || '').split(':');
+      const isDesc = (sortDirection || 'asc').toLowerCase() === 'desc';
+      const nameSort = sortField === 'name';
+      const activeDealsSort = sortField === 'activeDeals';
+      const offMarketDealsSort = sortField === 'offMarketDeals';
+      const allDealsSort = sortField === 'allDeals';
+      let sortStage: any;
+      if (activeDealsSort) {
+        sortStage = { $sort: { activeDealsCount: isDesc ? -1 : 1, sortKey: 1 as const, _id: 1 as const } };
+      } else if (offMarketDealsSort) {
+        sortStage = { $sort: { offMarketDealsCount: isDesc ? -1 : 1, sortKey: 1 as const, _id: 1 as const } };
+      } else if (allDealsSort) {
+        sortStage = { $sort: { allDealsCount: isDesc ? -1 : 1, sortKey: 1 as const, _id: 1 as const } };
+      } else if (nameSort) {
+        sortStage = { $sort: { sortKey: isDesc ? -1 : 1, _id: 1 as const } };
+      } else {
+        sortStage = { $sort: { sortKey: 1 as const, _id: 1 as const } };
+      }
+
+      const pipeline: any[] = [
         { $match: searchQuery },
+        {
+          $lookup: {
+            from: "deals",
+            localField: "_id",
+            foreignField: "seller",
+            as: "deals"
+          }
+        },
+        {
+          $addFields: {
+            activeDealsCount: {
+              $size: {
+                $filter: {
+                  input: "$deals",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$this.status", "completed"] },
+                      {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $objectToArray: "$$this.invitationStatus" },
+                                as: "inv",
+                                cond: { $eq: ["$$inv.v.response", "accepted"] }
+                              }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            offMarketDealsCount: {
+              $size: {
+                $filter: {
+                  input: "$deals",
+                  cond: { $eq: ["$$this.status", "completed"] }
+                }
+              }
+            },
+            allDealsCount: {
+              $size: {
+                $filter: {
+                  input: "$deals",
+                  cond: { $ne: ["$$this.status", "completed"] }
+                }
+              }
+            }
+          }
+        },
         {
           $addFields: {
             sortKey: { $toLower: '$companyName' }
           }
         },
-        {
-          $sort: { sortKey: 1 as const, _id: 1 as const }
-        },
+        ...(activeOnly && activeOnly.toLowerCase() === 'true' ? [{ $match: { activeDealsCount: { $gt: 0 } } }] : []),
+        sortStage,
         { $skip: skip },
         { $limit: limit },
         {
@@ -75,13 +147,60 @@ export class SellersService {
             title: 1,
             role: 1,
             profilePicture: 1,
-            createdAt: 1
+            createdAt: 1,
+            activeDealsCount: 1,
+            offMarketDealsCount: 1,
+            allDealsCount: 1
           }
         }
       ];
 
       const sellers = await this.sellerModel.aggregate(pipeline).exec();
-      const total = await this.sellerModel.countDocuments(searchQuery).exec();
+      const totalPipeline: any[] = [
+        { $match: searchQuery },
+        {
+          $lookup: {
+            from: "deals",
+            localField: "_id",
+            foreignField: "seller",
+            as: "deals"
+          }
+        },
+        {
+          $addFields: {
+            activeDealsCount: {
+              $size: {
+                $filter: {
+                  input: "$deals",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$this.status", "completed"] },
+                      {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $objectToArray: "$$this.invitationStatus" },
+                                as: "inv",
+                                cond: { $eq: ["$$inv.v.response", "accepted"] }
+                              }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        ...(activeOnly && activeOnly.toLowerCase() === 'true' ? [{ $match: { activeDealsCount: { $gt: 0 } } }] : []),
+        { $count: 'count' }
+      ];
+      const totalAgg = await this.sellerModel.aggregate(totalPipeline).exec();
+      const total = totalAgg.length > 0 ? (totalAgg[0] as any).count : 0;
 
       return {
         data: sellers,

@@ -100,8 +100,8 @@ export class AdminService {
   }
 
   // Buyer Management
-  async getAllBuyers(page: number = 1, limit: number = 10, search: string = '', sortBy: string = ''): Promise<any> {
-    return this.buyersService.findAll(page, limit, search, sortBy)
+  async getAllBuyers(page: number = 1, limit: number = 10, search: string = '', sortBy: string = '', dealStatus: string = ''): Promise<any> {
+    return this.buyersService.findAll(page, limit, search, sortBy, dealStatus)
   }
 
   private isProfileComplete(profile: any): boolean {
@@ -177,8 +177,8 @@ export class AdminService {
   }
 
   // Seller Management
-  async getAllSellers(page: number = 1, limit: number = 10, search: string = '', sortBy: string = ''): Promise<any> {
-    return this.sellersService.findAll(page, limit, search, sortBy)
+  async getAllSellers(page: number = 1, limit: number = 10, search: string = '', sortBy: string = '', activeOnly: string = ''): Promise<any> {
+    return this.sellersService.findAll(page, limit, search, sortBy, activeOnly)
   }
 
   async deleteSeller(id: string): Promise<void> {
