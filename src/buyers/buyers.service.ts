@@ -135,11 +135,11 @@ export class BuyersService {
     return savedBuyer;
   }
 
-  async findAll(page = 1, limit = 10, search = '', sortBy = ''): Promise<any> {
+  async findAll(page: number = 1, limit: number = 10, search: string = '', sortBy: string = '', dealStatus: string = ''): Promise<any> {
     const skip = (page - 1) * limit;
     
     // Build search query
-    const searchQuery = search ? {
+    const searchQuery: any = search ? {
       $or: [
         { fullName: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
@@ -147,7 +147,231 @@ export class BuyersService {
         { phone: { $regex: search, $options: 'i' } }
       ]
     } : {};
-
+    
+    // Add deal status filter if provided
+    if (dealStatus && (dealStatus === 'active' || dealStatus === 'pending' || dealStatus === 'rejected')) {
+      const responseKey = dealStatus === 'active' ? 'accepted' : dealStatus;
+      // Use aggregation to filter by deal status and include per-buyer invitationStatus counts
+      const pipeline = [
+        { $match: searchQuery },
+        { $addFields: { buyerIdStr: { $toString: '$_id' } } },
+        {
+          $lookup: {
+            from: 'deals',
+            localField: '_id',
+            foreignField: 'targetedBuyers',
+            as: 'deals'
+          }
+        },
+        {
+          $addFields: {
+            activeDealsCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  cond: {
+                    $and: [
+                      { $ne: ['$$this.status', 'completed'] },
+                      {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $objectToArray: '$$this.invitationStatus' },
+                                as: 'inv',
+                                cond: {
+                                  $and: [
+                                    { $eq: ['$$inv.k', '$buyerIdStr'] },
+                                    { $eq: ['$$inv.v.response', 'accepted'] }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            pendingDealsCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  cond: {
+                    $and: [
+                      { $ne: ['$$this.status', 'completed'] },
+                      {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $objectToArray: '$$this.invitationStatus' },
+                                as: 'inv',
+                                cond: {
+                                  $and: [
+                                    { $eq: ['$$inv.k', '$buyerIdStr'] },
+                                    { $eq: ['$$inv.v.response', 'pending'] }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            rejectedDealsCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  cond: {
+                    $and: [
+                      { $ne: ['$$this.status', 'completed'] },
+                      {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $objectToArray: '$$this.invitationStatus' },
+                                as: 'inv',
+                                cond: {
+                                  $and: [
+                                    { $eq: ['$$inv.k', '$buyerIdStr'] },
+                                    { $eq: ['$$inv.v.response', 'rejected'] }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            filteredDealsCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  cond: {
+                    $and: [
+                      { $ne: ['$$this.status', 'completed'] },
+                      {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $objectToArray: '$$this.invitationStatus' },
+                                as: 'inv',
+                                cond: {
+                                  $and: [
+                                    { $eq: ['$$inv.k', '$buyerIdStr'] },
+                                    { $eq: ['$$inv.v.response', responseKey] }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        { $match: { filteredDealsCount: { $gt: 0 } } },
+        { $sort: { _id: 1 as const } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'companyprofiles',
+            localField: 'companyProfileId',
+            foreignField: '_id',
+            as: 'companyProfileId'
+          }
+        },
+        { $addFields: { companyProfileId: { $arrayElemAt: ['$companyProfileId', 0] } } }
+      ];
+      
+      const buyers = await this.buyerModel.aggregate(pipeline).exec();
+      const totalBuyersPipeline = [
+        { $match: searchQuery },
+        { $addFields: { buyerIdStr: { $toString: '$_id' } } },
+        {
+          $lookup: {
+            from: 'deals',
+            localField: '_id',
+            foreignField: 'targetedBuyers',
+            as: 'deals'
+          }
+        },
+        {
+          $addFields: {
+            filteredDealsCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  cond: {
+                    $and: [
+                      { $ne: ['$$this.status', 'completed'] },
+                      {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $objectToArray: '$$this.invitationStatus' },
+                                as: 'inv',
+                                cond: {
+                                  $and: [
+                                    { $eq: ['$$inv.k', '$buyerIdStr'] },
+                                    { $eq: ['$$inv.v.response', responseKey] }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        { $match: { filteredDealsCount: { $gt: 0 } } }
+      ];
+      const totalBuyers = await this.buyerModel.aggregate(totalBuyersPipeline).count('count').exec();
+      const totalCount = totalBuyers.length > 0 ? totalBuyers[0].count : 0;
+      
+      return {
+        data: buyers.map((buyer: any) => ({
+          ...buyer,
+          companyProfile: buyer.companyProfileId,
+          activeDealsCount: buyer.activeDealsCount,
+          pendingDealsCount: buyer.pendingDealsCount,
+          rejectedDealsCount: buyer.rejectedDealsCount
+        })),
+        total: totalCount,
+        page,
+        lastPage: Math.ceil(totalCount / limit),
+      };
+    }
+    
     // Check if sorting by deal counts
     const isDealSort = sortBy && (sortBy.includes('activeDeals') || sortBy.includes('pendingDeals') || sortBy.includes('rejectedDeals'));
     
@@ -155,36 +379,34 @@ export class BuyersService {
       // Use aggregation for deal sorting
       const [field, order] = sortBy.split(':');
       const dealStatus = field === 'activeDeals' ? 'active' : field === 'pendingDeals' ? 'pending' : 'rejected';
+      const sortOrder: 1 | -1 = order === 'desc' ? -1 : 1;
+      const sortObj: Record<string, 1 | -1> = { dealCount: sortOrder, _id: 1 };
       
       const pipeline = [
         { $match: searchQuery },
         {
           $lookup: {
             from: 'deals',
-            let: { buyerId: '$_id' },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      { $in: ['$$buyerId', { $map: { input: { $objectToArray: '$invitationStatus' }, as: 'item', in: '$$item.k' } }] },
-                      { $eq: [{ $getField: { field: 'response', input: { $arrayElemAt: [{ $objectToArray: '$invitationStatus' }, { $indexOfArray: [{ $map: { input: { $objectToArray: '$invitationStatus' }, as: 'item', in: '$$item.k' } }, '$$buyerId'] }] } } }, dealStatus] }
-                    ]
-                  }
-                }
-              }
-            ],
+            localField: '_id',
+            foreignField: 'targetedBuyers',
             as: 'deals'
           }
         },
         {
           $addFields: {
-            dealCount: { $size: '$deals' }
+            dealCount: {
+              $size: {
+                $filter: {
+                  input: '$deals',
+                  cond: {
+                    $eq: ['$$this.status', dealStatus]
+                  }
+                }
+              }
+            }
           }
         },
-        {
-          $sort: { dealCount: order === 'desc' ? -1 as const : 1 as const, _id: 1 as const }
-        },
+        { $sort: sortObj },
         { $skip: skip },
         { $limit: limit },
         {
@@ -205,13 +427,11 @@ export class BuyersService {
       const buyers = await this.buyerModel.aggregate(pipeline).exec();
       const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
       
-      const mappedBuyers = buyers.map((buyer: any) => ({
-        ...buyer,
-        companyProfile: buyer.companyProfileId,
-      }));
-      
       return {
-        data: mappedBuyers,
+        data: buyers.map((buyer: any) => ({
+          ...buyer,
+          companyProfile: buyer.companyProfileId,
+        })),
         total: totalBuyers,
         page,
         lastPage: Math.ceil(totalBuyers / limit),
@@ -237,13 +457,11 @@ export class BuyersService {
 
       const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
 
-      const mappedBuyers = buyers.map((buyer: any) => ({
-        ...buyer,
-        companyProfile: buyer.companyProfileId,
-      }));
-
       return {
-        data: mappedBuyers,
+        data: buyers.map((buyer: any) => ({
+          ...buyer,
+          companyProfile: buyer.companyProfileId,
+        })),
         total: totalBuyers,
         page,
         lastPage: Math.ceil(totalBuyers / limit),

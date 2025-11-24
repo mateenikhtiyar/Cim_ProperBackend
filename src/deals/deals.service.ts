@@ -115,7 +115,7 @@ export class DealsService {
 
 
 
-  async findAll(filters: { search?: string, buyerResponse?: string, status?: string } = {}, page: number = 1, limit: number = 10): Promise<any> {
+  async findAll(filters: { search?: string, buyerResponse?: string, status?: string, isPublic?: string, excludeStatus?: string } = {}, page: number = 1, limit: number = 10): Promise<any> {
     const skip = (page - 1) * limit;
     const query: any = {};
 
@@ -127,6 +127,9 @@ export class DealsService {
       ];
     }
 
+    // Handle status filtering - this needs to be done carefully to avoid conflicts
+    let statusFilterApplied = false;
+    
     if (filters.buyerResponse === 'accepted') {
       query['$expr'] = {
         '$gt': [
@@ -143,15 +146,62 @@ export class DealsService {
         ]
       };
       query.status = { $ne: 'completed' }; // Exclude completed deals from active deals
+      statusFilterApplied = true;
     }
 
-    if (filters.status) {
-      query.status = filters.status;
+    // Handle status filtering
+    if (filters.status && !statusFilterApplied) {
+      if (filters.status === 'active') {
+        // For active status, exclude completed deals
+        query.status = { $ne: 'completed' };
+      } else {
+        query.status = filters.status;
+      }
+      statusFilterApplied = true;
     }
+    
+    // Handle excludeStatus parameter - only apply if status filter wasn't applied
+    if (filters.excludeStatus && !statusFilterApplied) {
+      query.status = { $ne: filters.excludeStatus };
+    }
+  
+    if (filters.isPublic !== undefined) {
+      query.isPublic = filters.isPublic === 'true';
+    }
+  
     const deals = await this.dealModel.find(query).skip(skip).limit(limit).exec();
     const totalDeals = await this.dealModel.countDocuments(query).exec();
+  
+    // Add buyer status counts for each deal
+    const dealsWithCounts = await Promise.all(deals.map(async (deal) => {
+      try {
+        // Get the buyer status summary for this deal
+        const statusSummary = await this.getDealWithBuyerStatusSummary((deal as any)._id.toString());
+        
+        // Add buyer counts to the deal object
+        return {
+          ...deal.toObject(),
+          buyersByStatus: {
+            active: statusSummary.summary.totalActive || 0,
+            pending: statusSummary.summary.totalPending || 0,
+            rejected: statusSummary.summary.totalRejected || 0,
+          }
+        };
+      } catch (error) {
+        // If there's an error getting status summary, return deal with zero counts
+        return {
+          ...deal.toObject(),
+          buyersByStatus: {
+            active: 0,
+            pending: 0,
+            rejected: 0,
+          }
+        };
+      }
+    }));
+    
     return {
-      data: deals,
+      data: dealsWithCounts,
       total: totalDeals,
       page,
       lastPage: Math.ceil(totalDeals / limit),

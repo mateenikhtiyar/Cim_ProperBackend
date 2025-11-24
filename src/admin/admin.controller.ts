@@ -135,13 +135,15 @@ export class AdminController {
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Search term' })
   @ApiQuery({ name: 'sortBy', required: false, type: String, description: 'Sort by field:order (e.g., companyName:asc)' })
+  @ApiQuery({ name: 'dealStatus', required: false, type: String, description: 'Filter by deal status (active, pending, rejected)' })
   async getAllBuyers(
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
     @Query('search') search: string = '',
     @Query('sortBy') sortBy: string = '',
+    @Query('dealStatus') dealStatus: string = '',
   ) {
-    return this.adminService.getAllBuyers(page, limit, search, sortBy)
+    return this.adminService.getAllBuyers(page, limit, search, sortBy, dealStatus)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -206,8 +208,9 @@ export class AdminController {
     @Query('limit') limit: number = 10,
     @Query('search') search: string = '',
     @Query('sortBy') sortBy: string = '',
+    @Query('activeOnly') activeOnly: string = '',
   ) {
-    return this.adminService.getAllSellers(page, limit, search, sortBy)
+    return this.adminService.getAllSellers(page, limit, search, sortBy, activeOnly)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

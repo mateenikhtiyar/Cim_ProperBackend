@@ -437,8 +437,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     @Query('search') search: string = '',
     @Query('buyerResponse') buyerResponse?: string,
     @Query('status') status?: string,
+    @Query('isPublic') isPublic?: string,
+    @Query('excludeStatus') excludeStatus?: string,
   ) {
-    return this.dealsService.findAll({ search, buyerResponse, status }, page, limit)
+    return this.dealsService.findAll({ search, buyerResponse, status, isPublic, excludeStatus }, page, limit)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

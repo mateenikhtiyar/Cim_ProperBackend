@@ -6,7 +6,7 @@ async function testIncompleteProfilesAPI() {
     // You'll need to replace this with a valid admin token
     const token = 'your-admin-token-here';
     
-    const response = await fetch('http://localhost:3001/admin/buyers/incomplete-profiles', {
+    const response = await fetch('https://api.cimamplify.com/admin/buyers/incomplete-profiles', {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'

@@ -68,7 +68,7 @@ async function bootstrap() {
     console.log("Static files will be served from: /uploads/")
     await app.listen(3001)
     console.log("Application running on port 3001")
-    console.log("Swagger documentation available at: http://localhost:3001/api")
+    console.log("Swagger documentation available at: https://api.cimamplify.com/api")
   } catch (error) {
     console.error("Failed to start application:", error)
   }

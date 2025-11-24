@@ -2,7 +2,7 @@
 const fetch = require('node-fetch');
 require('dotenv').config();
 
-const API_BASE = process.env.BACKEND_URL || 'http://localhost:3001';
+const API_BASE = process.env.BACKEND_URL || 'https://api.cimamplify.com';
 
 async function testEmailFunctionality() {
   console.log('=== MANUAL EMAIL TESTING ===\n');
