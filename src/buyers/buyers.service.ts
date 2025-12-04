@@ -125,7 +125,7 @@ export class BuyersService {
     `);
 
     await this.mailService.sendEmailWithLogging(
-      "johnm@cimamplify.com",
+      "canotifications@amp-ven.com",
       "admin",
       ownerSubject,
       ownerHtmlBody,
@@ -560,7 +560,7 @@ export class BuyersService {
       `);
 
       await this.mailService.sendEmailWithLogging(
-        "johnm@cimamplify.com",
+        "canotifications@amp-ven.com",
         "admin",
         ownerSubject,
         ownerHtmlBody,
