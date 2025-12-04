@@ -96,7 +96,7 @@ export class DealsService {
         <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
       `);
       await this.mailService.sendEmailWithLogging(
-        'johnm@cimamplify.com',
+        'canotifications@amp-ven.com',
         'admin',
         ownerSubject,
         ownerHtmlBody,
@@ -1795,7 +1795,7 @@ export class DealsService {
       // Prepare company profile model
       const companyProfileModel = this.dealModel.db.model('CompanyProfile');
 
-      // Process invitationStatus
+      // Process invitationStatus - this is the authoritative source for buyer counts
       for (const { buyerId, response } of invitationStatusArray) {
         const [buyer, companyProfile] = await Promise.all([
           this.buyerModel
@@ -1809,7 +1809,7 @@ export class DealsService {
           console.warn(`Buyer with ID ${buyerId} not found`);
           continue;
         }
-        // companyProfile may be an array if not using .findOne(), so handle both cases
+        
         let resolvedCompanyName = '';
         if (companyProfile) {
           if (Array.isArray(companyProfile)) {
@@ -1819,14 +1819,18 @@ export class DealsService {
           }
         }
         const companyName = resolvedCompanyName || buyer.companyName || '';
+        
         const buyerData: BuyerStatus = {
           buyerId,
           buyerName: buyer.fullName || 'Unknown',
           buyerEmail: buyer.email || '',
           buyerCompany: companyName,
         };
+        
         buyerMap.set(buyerId, buyerData);
         buyerIds.add(buyerId);
+        
+        // Only use invitationStatus for categorization to avoid double counting
         switch (response) {
           case 'accepted':
             buyersByStatus.active.push(buyerData);
@@ -1841,60 +1845,21 @@ export class DealsService {
         }
       }
 
-      // Process buyer interactions
+      // Only add interaction details to existing buyers, don't create new categorizations
       const buyerInteractions = await this.getBuyerInteractionsForDeal(dealId);
       for (const interaction of buyerInteractions) {
         if (!mongoose.isValidObjectId(interaction.buyerId)) {
           console.warn(`Invalid buyerId in interactions: ${interaction.buyerId}`);
           continue;
         }
-        // Fetch company profile for interaction as well
-        const companyProfile = await companyProfileModel.findOne({ buyer: interaction.buyerId }).lean();
-        // companyProfile may be an array if not using .findOne(), so handle both cases
-        let resolvedCompanyNameInteraction = '';
-        if (companyProfile) {
-          if (Array.isArray(companyProfile)) {
-            resolvedCompanyNameInteraction = companyProfile[0]?.companyName || '';
-          } else {
-            resolvedCompanyNameInteraction = companyProfile.companyName || '';
-          }
-        }
-        const companyName = resolvedCompanyNameInteraction || interaction.buyerCompany || '';
-        const existingBuyer = buyerMap.get(interaction.buyerId);
-        const buyerData: BuyerStatus = {
-          buyerId: interaction.buyerId,
-          buyerName: interaction.buyerName || existingBuyer?.buyerName || 'Unknown',
-          buyerEmail: interaction.buyerEmail || existingBuyer?.buyerEmail || '',
-          buyerCompany: companyName,
-          companyType: interaction.companyType,
-          lastInteraction: interaction.lastInteraction,
-          totalInteractions: interaction.totalInteractions,
-          interactions: interaction.interactions,
-        };
-        if (!buyerIds.has(interaction.buyerId)) {
-          buyerMap.set(interaction.buyerId, buyerData);
-          buyerIds.add(interaction.buyerId);
-          const status = interaction.currentStatus;
-          switch (status) {
-            case 'accepted':
-            case 'completed':
-              buyersByStatus.active.push(buyerData);
-              break;
-            case 'pending':
-              buyersByStatus.pending.push(buyerData);
-              break;
-            case 'rejected':
-              buyersByStatus.rejected.push(buyerData);
-              break;
-          }
-        } else {
-          // Update existing buyer with interaction details
+        
+        // Only update existing buyers with interaction details
+        if (buyerIds.has(interaction.buyerId)) {
           const existing = buyerMap.get(interaction.buyerId)!;
           existing.companyType = interaction.companyType || existing.companyType;
           existing.lastInteraction = interaction.lastInteraction || existing.lastInteraction;
           existing.totalInteractions = interaction.totalInteractions || existing.totalInteractions;
           existing.interactions = interaction.interactions || existing.interactions;
-          existing.buyerCompany = companyName;
         }
       }
 
@@ -2033,7 +1998,7 @@ export class DealsService {
           <p><b>Buyer Email:</b> ${winningBuyer.email}</p>
         `);
         await this.mailService.sendEmailWithLogging(
-          'johnm@cimamplify.com',
+          'canotifications@amp-ven.com',
           'admin',
           ownerSubject,
           ownerHtmlBody,
