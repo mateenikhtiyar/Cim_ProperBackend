@@ -1899,8 +1899,14 @@ export class DealsService {
     }
 
     dealDoc.status = DealStatus.COMPLETED;
+
+    // Ensure timeline object exists
+    if (!dealDoc.timeline || typeof dealDoc.timeline !== 'object') {
+      dealDoc.timeline = {} as any;
+    }
     dealDoc.timeline.completedAt = new Date();
     dealDoc.timeline.updatedAt = new Date();
+    dealDoc.markModified('timeline');
 
     if (finalSalePrice !== undefined && finalSalePrice !== null) {
       if (!dealDoc.financialDetails || typeof dealDoc.financialDetails !== 'object') {

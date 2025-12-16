@@ -159,56 +159,41 @@ export class DealsController {
       },
     },
   })
-  @UseInterceptors(
-    FilesInterceptor("files", 10, {
-      storage: diskStorage({
-        destination: "./uploads/deal-documents",
-        filename: (req: any, file, cb) => {
-          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
-          const ext = extname(file.originalname)
-          const userId = req.user?.userId || "unknown"
-          const sanitizedOriginalName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")
-          cb(null, `${userId}_${uniqueSuffix}_${sanitizedOriginalName}`)
-        },
-      }),
-      fileFilter: (req, file, cb) => {
-        const allowedTypes = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|jpg|jpeg|png|gif)$/i
-        if (!file.originalname.match(allowedTypes)) {
-          return cb(new Error("Only document and image files are allowed!"), false)
-        }
-        cb(null, true)
-      },
-      limits: {
-        fileSize: 1024 * 1024 * 10, // 10MB limit per file
-      },
-    }),
-  )
+  // @UseInterceptors - DISABLED FOR VERCEL (read-only filesystem)
+  // FilesInterceptor("files", 10, {
+  //   storage: diskStorage({
+  //     destination: "./uploads/deal-documents",
+  //   }),
+  // })
   async create(
-    @Body() body: { dealData: string },
+    @Body() body: { dealData: string } | CreateDealDto,
     @Request() req: RequestWithUser,
-    @UploadedFiles() files?: Express.Multer.File[]
+    // @UploadedFiles() files?: Express.Multer.File[] // DISABLED FOR VERCEL
   ) {
     if (!req.user?.userId) {
       throw new UnauthorizedException('User not authenticated')
     }
-  
+
     let createDealDto: CreateDealDto
-    try {
-      createDealDto = JSON.parse(body.dealData)
-    } catch {
-      throw new BadRequestException('Invalid JSON in dealData field')
+
+    // Handle both JSON body and FormData with dealData string
+    if ('dealData' in body && typeof body.dealData === 'string') {
+      // FormData approach: dealData is a JSON string
+      try {
+        createDealDto = JSON.parse(body.dealData)
+      } catch {
+        throw new BadRequestException('Invalid JSON in dealData field')
+      }
+    } else if ('title' in body) {
+      // Direct JSON body approach
+      createDealDto = body as CreateDealDto
+    } else {
+      throw new BadRequestException('Invalid request body: expected dealData string or deal object')
     }
-  
-    // Gather uploaded file data
-    const documents = files?.map((file) => ({
-      filename: file.filename,
-      originalName: file.originalname,
-      path: file.path,
-      size: file.size,
-      mimetype: file.mimetype,
-      uploadedAt: new Date(),
-    })) || []
-  
+
+    // File uploads disabled for Vercel
+    const documents = []
+
     // Merge seller and documents into the DTO
     const dealWithSellerAndDocuments: CreateDealDto = {
       ...createDealDto,
@@ -217,7 +202,7 @@ export class DealsController {
       // this will work; if it's just file paths, do: documents.map(doc => doc.path)
       documents,
     }
-  
+
     // Save the deal
     return this.dealsService.create(dealWithSellerAndDocuments)
   }
@@ -246,36 +231,10 @@ export class DealsController {
       },
     },
   })
-  @UseInterceptors(
-    FilesInterceptor("files", 10, {
-      // Allow up to 10 files
-      storage: diskStorage({
-        destination: "./uploads/deal-documents",
-        filename: (req: any, file, cb) => {
-          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
-          const ext = extname(file.originalname)
-          const dealId = req.params.id
-          const sanitizedOriginalName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")
-          cb(null, `${dealId}_${uniqueSuffix}_${sanitizedOriginalName}`)
-        },
-      }),
-      fileFilter: (req, file, cb) => {
-        // Allow common document types
-        const allowedTypes = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|jpg|jpeg|png|gif)$/i
-        if (!file.originalname.match(allowedTypes)) {
-          return cb(new Error("Only document and image files are allowed!"), false)
-        }
-        cb(null, true)
-      },
-      limits: {
-        fileSize: 1024 * 1024 * 10, // 10MB limit per file
-      },
-    }),
-  )
+  // @UseInterceptors - DISABLED FOR VERCEL (read-only filesystem)
   async uploadDocuments(
     @Param("id") dealId: string,
     @Request() req: RequestWithUser,
-    @UploadedFiles() files: Express.Multer.File[],
   ) {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
@@ -287,25 +246,11 @@ export class DealsController {
       throw new ForbiddenException("You don't have permission to upload documents for this deal")
     }
 
-    if (!files || files.length === 0) {
-      throw new Error("No files uploaded")
-    }
-
-    const documentPaths = files.map((file) => ({
-      filename: file.filename,
-      originalName: file.originalname,
-      path: file.path,
-      size: file.size,
-      mimetype: file.mimetype,
-      uploadedAt: new Date(),
-    }))
-
-    const updatedDeal = await this.dealsService.addDocuments(dealId, documentPaths)
-
+    // File uploads disabled for Vercel
     return {
-      message: "Documents uploaded successfully",
-      uploadedFiles: documentPaths.length,
-      documents: documentPaths,
+      error: "File uploads are not supported on Vercel's read-only filesystem",
+      message: "Please use Cloudinary or AWS S3 for file uploads",
+      documentation: "See CLOUDINARY-SETUP.md in the repository"
     }
   }
 
