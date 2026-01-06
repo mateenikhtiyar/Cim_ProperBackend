@@ -31,7 +31,7 @@ export const genericEmailTemplate = (title: string, name: string, htmlContent: s
         <tr>
             <td align="center" style="padding: 20px 0; color: #6b7280;">
                 <p style="margin: 0;">You’re receiving this email because you have an active profile on CIM Amplify.</p>
-                <p style="margin: 0;">© 2025 CIM Amplify. All rights reserved.</p>
+                <p style="margin: 0;">© 2026 CIM Amplify. All rights reserved.</p>
             </td>
         </tr>
     </table>
