@@ -55,6 +55,13 @@ interface DocumentInfo {
 export class DealsController {
   constructor(private readonly dealsService: DealsService) { }
 
+  @Get('health')
+  @ApiOperation({ summary: 'Health check endpoint' })
+  @ApiResponse({ status: 200, description: 'Server is healthy' })
+  async healthCheck() {
+    return { status: 'ok', timestamp: new Date().toISOString() };
+  }
+
   // Marketplace: list public deals (buyer only) with buyer-specific status
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('buyer')
@@ -172,45 +179,50 @@ export class DealsController {
   //   }),
   // })
   async create(
-    @Body() body: { dealData: string } | CreateDealDto,
+    @Body() body: any, // Accept any body type
     @Request() req: RequestWithUser,
-    // @UploadedFiles() files?: Express.Multer.File[] // DISABLED FOR VERCEL
   ) {
+    console.log('Deal creation request received:', { userId: req.user?.userId, bodyKeys: Object.keys(body || {}) });
+    
     if (!req.user?.userId) {
       throw new UnauthorizedException('User not authenticated')
     }
 
     let createDealDto: CreateDealDto
 
-    // Handle both JSON body and FormData with dealData string
-    if ('dealData' in body && typeof body.dealData === 'string') {
-      // FormData approach: dealData is a JSON string
-      try {
+    try {
+      // Handle both JSON body and FormData with dealData string
+      if (body && typeof body === 'object' && 'dealData' in body && typeof body.dealData === 'string') {
+        // FormData approach: dealData is a JSON string
         createDealDto = JSON.parse(body.dealData)
-      } catch {
-        throw new BadRequestException('Invalid JSON in dealData field')
+      } else if (body && typeof body === 'object' && 'title' in body) {
+        // Direct JSON body approach
+        createDealDto = body as CreateDealDto
+      } else {
+        console.error('Invalid request body structure:', body);
+        throw new BadRequestException('Invalid request body: expected dealData string or deal object')
       }
-    } else if ('title' in body) {
-      // Direct JSON body approach
-      createDealDto = body as CreateDealDto
-    } else {
-      throw new BadRequestException('Invalid request body: expected dealData string or deal object')
+
+      // File uploads disabled - just create empty documents array
+      const documents = []
+
+      // Merge seller and documents into the DTO
+      const dealWithSellerAndDocuments: CreateDealDto = {
+        ...createDealDto,
+        seller: req.user.userId,
+        documents,
+      }
+
+      console.log('Creating deal with data:', { title: dealWithSellerAndDocuments.title, seller: dealWithSellerAndDocuments.seller });
+
+      // Save the deal
+      const result = await this.dealsService.create(dealWithSellerAndDocuments);
+      console.log('Deal created successfully:', result._id);
+      return result;
+    } catch (error) {
+      console.error('Deal creation error:', error);
+      throw error;
     }
-
-    // File uploads disabled for Vercel
-    const documents = []
-
-    // Merge seller and documents into the DTO
-    const dealWithSellerAndDocuments: CreateDealDto = {
-      ...createDealDto,
-      seller: req.user.userId,
-      // If you changed your schema's `documents` to accept an array of `DocumentInfo`,
-      // this will work; if it's just file paths, do: documents.map(doc => doc.path)
-      documents,
-    }
-
-    // Save the deal
-    return this.dealsService.create(dealWithSellerAndDocuments)
   }
 
   
