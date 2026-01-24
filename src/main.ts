@@ -39,9 +39,18 @@ async function bootstrap() {
   if (frontendUrl.endsWith("/")) {
     frontendUrl = frontendUrl.slice(0, -1)
   }
+  // Enable CORS before other middleware
+  app.enableCors({
+    origin: true, // Allow all origins for now
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  })
+
   // Increase body size limit for large uploads (e.g., base64 images)
-  app.use(express.json({ limit: '10mb' }))
-  app.use(express.urlencoded({ limit: '10mb', extended: true }))
+  app.use(express.json({ limit: '50mb' }))
+  app.use(express.urlencoded({ limit: '50mb', extended: true }))
+  
   // Global exception filter for consistent error responses
   app.useGlobalFilters(new GlobalExceptionFilter())
 
@@ -55,21 +64,7 @@ async function bootstrap() {
       },
     }),
   )
-  // Fix CORS configuration
-  const allowedOrigins = [
-    "https://app.cimamplify.com",
-    process.env.FRONTEND_URL,
-    "https://app.cimamplify.com",
-    "http://localhost:3000",
-    "http://localhost:5000", // Keep for backward compatibility
-  ].filter(Boolean);
   
-  app.enableCors({
-    origin: true, // Allow all origins for now
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  })
   // Setup Swagger with CDN assets for Vercel
   const config = new DocumentBuilder()
     .setTitle("CIM Amplify API")
