@@ -79,6 +79,23 @@ export class CompanyProfileController {
     }
   }
 
+  // IMPORTANT: Static routes must come before dynamic :id routes
+  @Get('public')
+  @ApiOperation({ summary: 'Get all company profiles (public access for sellers to see buyer info)' })
+  @ApiResponse({ status: 200, description: 'Return all company profiles' })
+  async findAllPublic() {
+    return this.companyProfileService.findAll();
+  }
+
+  @Get('public/:id')
+  @ApiOperation({ summary: 'Get a company profile by ID (public access)' })
+  @ApiParam({ name: 'id', type: String, description: 'Company profile ID' })
+  @ApiResponse({ status: 200, description: 'Return the company profile' })
+  @ApiResponse({ status: 404, description: 'Company profile not found' })
+  async findOnePublic(@Param('id') id: string) {
+    return this.companyProfileService.findOne(id);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Roles('buyer')
   @Get(':id')
@@ -89,15 +106,6 @@ export class CompanyProfileController {
   @ApiResponse({ status: 403, description: 'Forbidden - requires admin or buyer role' })
   @ApiResponse({ status: 404, description: 'Company profile not found' })
   async findOne(@Param('id') id: string) {
-    return this.companyProfileService.findOne(id);
-  }
-
-  @Get('public/:id')
-  @ApiOperation({ summary: 'Get a company profile by ID (public access)' })
-  @ApiParam({ name: 'id', type: String, description: 'Company profile ID' })
-  @ApiResponse({ status: 200, description: 'Return the company profile' })
-  @ApiResponse({ status: 404, description: 'Company profile not found' })
-  async findOnePublic(@Param('id') id: string) {
     return this.companyProfileService.findOne(id);
   }
 

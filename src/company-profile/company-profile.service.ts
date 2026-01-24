@@ -60,19 +60,85 @@ export class CompanyProfileService {
   }
   
 
-  async findOne(id: string): Promise<CompanyProfile> {
+  async findAll(): Promise<CompanyProfile[]> {
+    return this.companyProfileModel.find().exec();
+  }
+
+  async findOne(id: string): Promise<any> {
     const companyProfile = await this.companyProfileModel.findById(id).populate('buyer').exec()
     if (!companyProfile) {
       throw new NotFoundException("Company profile not found")
     }
+
+    // Get buyer data from populated field or fetch separately
+    const buyer = companyProfile.buyer as any;
+    if (buyer && typeof buyer === 'object') {
+      const profileObj = companyProfile.toObject ? companyProfile.toObject() : { ...companyProfile };
+
+      // Override company profile fields with buyer's latest data
+      if (buyer.companyName) {
+        profileObj.companyName = buyer.companyName;
+      }
+      if (buyer.website) {
+        profileObj.website = buyer.website;
+      }
+
+      // Update first contact with buyer's info if contacts exist
+      if (profileObj.contacts && profileObj.contacts.length > 0) {
+        if (buyer.fullName) profileObj.contacts[0].name = buyer.fullName;
+        if (buyer.email) profileObj.contacts[0].email = buyer.email;
+        if (buyer.phone) profileObj.contacts[0].phone = buyer.phone;
+      } else if (buyer.fullName || buyer.email || buyer.phone) {
+        // Create contact if none exists
+        profileObj.contacts = [{
+          name: buyer.fullName || '',
+          email: buyer.email || '',
+          phone: buyer.phone || ''
+        }];
+      }
+
+      return profileObj;
+    }
+
     return companyProfile
   }
 
-  async findByBuyerId(buyerId: string): Promise<CompanyProfile> {
+  async findByBuyerId(buyerId: string): Promise<any> {
     const companyProfile = await this.companyProfileModel.findOne({ buyer: buyerId }).exec()
     if (!companyProfile) {
       throw new NotFoundException("Company profile not found for this buyer")
     }
+
+    // Get buyer data to merge latest info
+    const buyer = await this.buyerModel.findById(buyerId).exec();
+    if (buyer) {
+      const profileObj = companyProfile.toObject ? companyProfile.toObject() : { ...companyProfile };
+
+      // Override company profile fields with buyer's latest data
+      if (buyer.companyName) {
+        profileObj.companyName = buyer.companyName;
+      }
+      if (buyer.website) {
+        profileObj.website = buyer.website;
+      }
+
+      // Update first contact with buyer's info if contacts exist
+      if (profileObj.contacts && profileObj.contacts.length > 0) {
+        if (buyer.fullName) profileObj.contacts[0].name = buyer.fullName;
+        if (buyer.email) profileObj.contacts[0].email = buyer.email;
+        if (buyer.phone) profileObj.contacts[0].phone = buyer.phone;
+      } else if (buyer.fullName || buyer.email || buyer.phone) {
+        // Create contact if none exists
+        profileObj.contacts = [{
+          name: buyer.fullName || '',
+          email: buyer.email || '',
+          phone: buyer.phone || ''
+        }];
+      }
+
+      return profileObj;
+    }
+
     return companyProfile
   }
 
@@ -94,7 +160,47 @@ export class CompanyProfileService {
 
     // Update the profile
     Object.assign(companyProfile, updateCompanyProfileDto);
-    return companyProfile.save();
+    await companyProfile.save();
+
+    // Sync to buyer if company-level fields are updated
+    const buyer = await this.buyerModel.findById(buyerId).exec();
+    if (buyer) {
+      let buyerUpdated = false;
+
+      // Sync company name and website to buyer
+      if (updateCompanyProfileDto.companyName) {
+        buyer.companyName = updateCompanyProfileDto.companyName;
+        buyerUpdated = true;
+      }
+      if (updateCompanyProfileDto.website) {
+        buyer.website = updateCompanyProfileDto.website;
+        buyerUpdated = true;
+      }
+
+      // Sync first contact info to buyer
+      const contacts = (updateCompanyProfileDto as any).contacts;
+      if (contacts && contacts.length > 0) {
+        const firstContact = contacts[0];
+        if (firstContact.name) {
+          buyer.fullName = firstContact.name;
+          buyerUpdated = true;
+        }
+        if (firstContact.email) {
+          buyer.email = firstContact.email;
+          buyerUpdated = true;
+        }
+        if (firstContact.phone) {
+          buyer.phone = firstContact.phone;
+          buyerUpdated = true;
+        }
+      }
+
+      if (buyerUpdated) {
+        await buyer.save();
+      }
+    }
+
+    return companyProfile;
   }
 
   async remove(id: string, buyerId: string): Promise<void> {

@@ -58,7 +58,15 @@ export class BuyersController {
       const buyer = await this.buyersService.create(createBuyerDto)
       const result = buyer?.toObject ? buyer.toObject() : { ...buyer }
       delete result.password
-      return result
+
+      // Generate token for immediate login after registration
+      const loginResult = await this.authService.login(buyer)
+
+      return {
+        ...result,
+        token: loginResult.access_token,
+        userId: result._id?.toString() || result.id?.toString(),
+      }
     } catch (error) {
       console.error("Registration error:", error)
       throw error
@@ -96,10 +104,6 @@ export class BuyersController {
 
       const loginResult = (await this.authService.loginWithGoogle(req.user)) as GoogleLoginResult
 
-      console.log("Login result:", JSON.stringify(loginResult, null, 2))
-      console.log("User ID type:", typeof loginResult.user._id)
-      console.log("User ID value:", loginResult.user._id)
-
       const frontendUrl = process.env.FRONTEND_URL
       const redirectPath = loginResult.isNewUser ? "/buyer/acquireprofile" : "/deals"
 
@@ -107,10 +111,8 @@ export class BuyersController {
 
       const redirectUrl = `${frontendUrl}${redirectPath}?token=${loginResult.access_token}&userId=${userId}`
 
-      console.log("Redirect URL:", redirectUrl)
       return res.redirect(redirectUrl)
     } catch (error) {
-      console.error("Google callback error:", error)
       const frontendUrl = process.env.FRONTEND_URL
       return res.redirect(`${frontendUrl}/auth/error?message=${encodeURIComponent(error.message)}`)
     }
@@ -126,50 +128,150 @@ export class BuyersController {
     return this.buyersService.findById(req.user?.userId);
   }
 
+  // UPLOAD ENDPOINTS DISABLED FOR VERCEL (read-only filesystem)
+  // Use Cloudinary or AWS S3 for file uploads in production
+  /*
   @UseGuards(JwtAuthGuard)
   @Post("upload-profile-picture")
   @ApiBearerAuth()
+  @UseInterceptors(
+    FileInterceptor("profilePicture", {
+      storage: diskStorage({
+        destination: "./uploads/profile-pictures",
+        filename: (req, file, cb) => {
+          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
+          const ext = extname(file.originalname)
+          cb(null, `profile-${uniqueSuffix}${ext}`)
+        },
+      }),
+      fileFilter: (req, file, cb) => {
+        if (!file.mimetype.match(/\/(jpg|jpeg|png|gif|webp)$/)) {
+          cb(new Error("Only image files are allowed!"), false)
+        } else {
+          cb(null, true)
+        }
+      },
+      limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    })
+  )
   @ApiConsumes("multipart/form-data")
   @ApiOperation({ summary: "Upload profile picture" })
-  @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
-  @ApiResponse({ status: 401, description: "Unauthorized" })
   @ApiBody({
     schema: {
       type: "object",
       properties: {
-        file: {
+        profilePicture: {
           type: "string",
           format: "binary",
         },
       },
     },
   })
+  @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async uploadProfilePicture(
+    @Request() req: any,
+    @UploadedFile() file: Express.Multer.File
+  ) {
+    if (!file) {
+      return { error: "No file uploaded" }
+    }
+    const profilePicturePath = `uploads/profile-pictures/${file.filename}`
+    await this.buyersService.updateProfilePicture(req.user.userId, profilePicturePath)
+    return {
+      message: "Profile picture uploaded successfully",
+      profilePicture: profilePicturePath
+    }
+  }
+  */
+
+  // Temporary endpoint that returns error for file uploads on Vercel
+  @UseGuards(JwtAuthGuard)
+  @Post("upload-profile-picture")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Upload profile picture (disabled on Vercel)" })
+  @ApiResponse({ status: 501, description: "File uploads not supported on Vercel" })
+  async uploadProfilePicture(
+    @Request() req: any
+  ) {
+    return {
+      error: "File uploads are not supported on Vercel's read-only filesystem",
+      message: "Please use Cloudinary or AWS S3 for file uploads",
+      documentation: "See CLOUDINARY-SETUP.md in the repository"
+    }
+  }
+
+  // UPLOAD ENDPOINTS DISABLED FOR VERCEL (read-only filesystem)
+  // Use Cloudinary or AWS S3 for file uploads in production
+  /*
+  @UseGuards(JwtAuthGuard)
+  @Post("profile/picture")
+  @ApiBearerAuth()
   @UseInterceptors(
-    FileInterceptor("file", {
+    FileInterceptor("profilePicture", {
       storage: diskStorage({
         destination: "./uploads/profile-pictures",
-        filename: (req: any, file, cb) => {
+        filename: (req, file, cb) => {
           const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
           const ext = extname(file.originalname)
-          const userId = req.user?.userId || "unknown"
-          cb(null, `${userId}${uniqueSuffix}${ext}`)
+          cb(null, `profile-${uniqueSuffix}${ext}`)
         },
       }),
       fileFilter: (req, file, cb) => {
-        if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
-          return cb(new Error("Only image files are allowed!"), false)
+        if (!file.mimetype.match(/\/(jpg|jpeg|png|gif|webp)$/)) {
+          cb(new Error("Only image files are allowed!"), false)
+        } else {
+          cb(null, true)
         }
-        cb(null, true)
       },
-      limits: {
-        fileSize: 1024 * 1024 * 5, // 5MB limit
-      },
-    }),
+      limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    })
   )
-  async uploadProfilePicture(@Request() req: any, @UploadedFile() file: any) {
-    const profilePicturePath = file.path
-    const buyer = await this.buyersService.updateProfilePicture(req.user?.userId, profilePicturePath)
-    return { message: "Profile picture uploaded successfully", profilePicture: profilePicturePath }
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "Upload profile picture (alternative endpoint)" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        profilePicture: {
+          type: "string",
+          format: "binary",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async uploadProfilePictureAlt(
+    @Request() req: any,
+    @UploadedFile() file: Express.Multer.File
+  ) {
+    if (!file) {
+      return { error: "No file uploaded" }
+    }
+    const profilePicturePath = `uploads/profile-pictures/${file.filename}`
+    await this.buyersService.updateProfilePicture(req.user.userId, profilePicturePath)
+    return {
+      message: "Profile picture uploaded successfully",
+      profilePicture: profilePicturePath
+    }
+  }
+  */
+
+  // Temporary endpoint that returns error for file uploads on Vercel
+  @UseGuards(JwtAuthGuard)
+  @Post("profile/picture")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Upload profile picture (disabled on Vercel)" })
+  @ApiResponse({ status: 501, description: "File uploads not supported on Vercel" })
+  async uploadProfilePictureAlt(
+    @Request() req: any
+  ) {
+    return {
+      error: "File uploads are not supported on Vercel's read-only filesystem",
+      message: "Please use Cloudinary or AWS S3 for file uploads",
+      documentation: "See CLOUDINARY-SETUP.md in the repository"
+    }
   }
 
   // IMPORTANT: Put specific routes BEFORE parameterized routes
@@ -327,6 +429,25 @@ export class BuyersController {
   update(@Request() req: RequestWithUser, @Body() updateBuyerDto: UpdateBuyerDto) {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
+    }
+    return this.buyersService.update(req.user.userId, updateBuyerDto)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("buyer")
+  @Patch("profile")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Update buyer profile (alternative endpoint)" })
+  @ApiResponse({ status: 200, description: "The buyer has been successfully updated." })
+  @ApiResponse({ status: 401, description: "Unauthorized." })
+  updateProfileAlt(@Request() req: RequestWithUser, @Body() updateBuyerDto: UpdateBuyerDto) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+    // Convert phoneNumber to phone if provided (frontend uses phoneNumber, backend uses phone)
+    if ((updateBuyerDto as any).phoneNumber !== undefined) {
+      updateBuyerDto.phone = (updateBuyerDto as any).phoneNumber;
+      delete (updateBuyerDto as any).phoneNumber;
     }
     return this.buyersService.update(req.user.userId, updateBuyerDto)
   }

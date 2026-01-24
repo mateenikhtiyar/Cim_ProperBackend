@@ -52,12 +52,20 @@ export class SellersController {
   @ApiResponse({ status: 201, description: 'Seller successfully registered' })
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 409, description: 'Email already exists' })
-  async register(@Body() createSellerDto: RegisterSellerDto): Promise<Omit<RegisterSellerDto, 'password'>> {
+  async register(@Body() createSellerDto: RegisterSellerDto) {
     try {
       const seller = await this.sellersService.create(createSellerDto);
       const result = seller.toObject ? seller.toObject() : { ...seller };
       delete result.password;
-      return result;
+
+      // Generate token for immediate login after registration
+      const loginResult = await this.authService.loginSeller(seller);
+
+      return {
+        ...result,
+        token: loginResult.access_token,
+        userId: result._id?.toString() || result.id?.toString(),
+      };
     } catch (error) {
       this.logger.error(`Registration error: ${error.message}`, error.stack);
       throw error;
@@ -417,6 +425,9 @@ export class SellersController {
     }
   }
 
+  // UPLOAD ENDPOINTS DISABLED FOR VERCEL (read-only filesystem)
+  // Use Cloudinary or AWS S3 for file uploads in production
+  /*
   @UseGuards(JwtAuthGuard)
   @Post("upload-profile-picture")
   @ApiBearerAuth()
@@ -424,65 +435,69 @@ export class SellersController {
   @ApiOperation({ summary: "Upload profile picture" })
   @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
   @ApiResponse({ status: 401, description: "Unauthorized" })
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        file: {
-          type: "string",
-          format: "binary",
-        },
-      },
-    },
-  })
   @UseInterceptors(
-    FileInterceptor("file", {
+    FileInterceptor('file', {
       storage: diskStorage({
-        destination: "./uploads/profile-pictures",
-        filename: (req: any, file, cb) => {
-          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          const userId = req.user?.userId || req.user?.sub || "unknown";
-          cb(null, `seller-${userId}-${uniqueSuffix}${ext}`);
+        destination: './uploads/profile-pictures',
+        filename: (req, file, cb) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `${uniqueSuffix}${extname(file.originalname)}`);
         },
       }),
       fileFilter: (req, file, cb) => {
-        if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
-          return cb(new Error("Only image files are allowed!"), false);
+        if (!file.mimetype.match(/\/(jpg|jpeg|png|gif)$/)) {
+          cb(new Error('Only image files are allowed!'), false);
+        } else {
+          cb(null, true);
         }
-        cb(null, true);
       },
       limits: {
-        fileSize: 1024 * 1024 * 5, // 5MB limit
+        fileSize: 5 * 1024 * 1024, // 5MB limit
       },
     }),
   )
-  async uploadProfilePicture(@Request() req: any, @UploadedFile() file: any) {
+  async uploadProfilePicture(
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req: any,
+  ) {
     try {
       if (!file) {
         throw new BadRequestException('No file uploaded');
       }
+
       const sellerId = req.user?.userId || req.user?.sub;
       if (!sellerId) {
         throw new UnauthorizedException('User not authenticated');
       }
-      const profilePicturePath = file.path;
-      const seller = await this.sellersService.updateProfilePicture(sellerId, profilePicturePath);
+
+      // Update seller's profile picture path
+      const profilePicturePath = `uploads/profile-pictures/${file.filename}`;
+      await this.sellersService.update(sellerId, { profilePicture: profilePicturePath });
+
       return {
-        message: "Profile picture uploaded successfully",
+        message: 'Profile picture uploaded successfully',
         profilePicture: profilePicturePath,
-        seller: {
-          id: (seller as any)._id || (seller as any).id,
-          fullName: seller.fullName,
-          email: seller.email,
-          phoneNumber: seller.phoneNumber,
-          role: seller.role,
-          profilePicture: seller.profilePicture
-        }
       };
     } catch (error) {
       this.logger.error(`Error uploading profile picture: ${error.message}`, error.stack);
       throw error;
+    }
+  }
+  */
+
+  // Temporary endpoint that returns error for file uploads on Vercel
+  @UseGuards(JwtAuthGuard)
+  @Post("upload-profile-picture")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Upload profile picture (disabled on Vercel)" })
+  @ApiResponse({ status: 501, description: "File uploads not supported on Vercel" })
+  async uploadProfilePicture(
+    @Request() req: any,
+  ) {
+    return {
+      error: "File uploads are not supported on Vercel's read-only filesystem",
+      message: "Please use Cloudinary or AWS S3 for file uploads",
+      documentation: "See CLOUDINARY-SETUP.md in the repository"
     }
   }
 

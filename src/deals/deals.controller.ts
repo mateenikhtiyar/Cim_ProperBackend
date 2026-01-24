@@ -67,6 +67,12 @@ export class DealsController {
     const deals = await this.dealsService.findPublicDeals();
     const results: any[] = [];
     for (const d of deals) {
+      // Skip deals that the buyer has hidden (marked as "not interested")
+      const hiddenByBuyers = Array.isArray(d?.hiddenByBuyers) ? d.hiddenByBuyers.map(String) : [];
+      if (hiddenByBuyers.includes(String(buyerId))) {
+        continue;
+      }
+
       let currentBuyerStatus: 'none' | 'requested' | 'pending' | 'accepted' | 'rejected' = 'none';
       let currentBuyerRequested = false;
       try {
@@ -272,6 +278,24 @@ export class DealsController {
     return this.dealsService.requestAccess(dealId, req.user.userId);
   }
 
+  // Buyer marks a marketplace deal as not interested
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('buyer')
+  @Post(':id/not-interested')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Mark a marketplace deal as not interested (buyer only)' })
+  @ApiParam({ name: 'id', description: 'Deal ID' })
+  @ApiResponse({ status: 200, description: 'Deal marked as not interested' })
+  async markNotInterested(
+    @Param('id') dealId: string,
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    return this.dealsService.markNotInterested(dealId, req.user.userId);
+  }
+
 // Place static routes before dynamic routes
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin')
@@ -321,15 +345,18 @@ async getBuyerDealsByStatus(@Param('buyerId') buyerId: string, @Query('status') 
 @ApiBearerAuth()
 @ApiOperation({ summary: 'Get all deals for a seller by status (admin only)' })
 @ApiParam({ name: 'sellerId', description: 'Seller ID' })
-@ApiQuery({ name: 'status', required: false, enum: ['active', 'completed'], description: 'Deal status' })
+@ApiQuery({ name: 'status', required: false, enum: ['active', 'completed', 'loi'], description: 'Deal status' })
 @ApiResponse({ status: 200, description: 'Deals for the seller', type: [Object] })
-async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status') status?: 'active' | 'completed') {
+async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status') status?: 'active' | 'completed' | 'loi') {
   if (status === 'completed') {
     return this.dealsService.getCompletedDeals(sellerId);
   } else if (status === 'active') {
     return this.dealsService.getSellerActiveDeals(sellerId);
+  } else if (status === 'loi') {
+    return this.dealsService.getSellerLOIDeals(sellerId);
   } else {
-    return this.dealsService.findBySeller(sellerId);
+    // For "all" deals, return all non-completed deals (includes LOI)
+    return this.dealsService.findAllDealsBySeller(sellerId);
   }
 }
 
@@ -368,8 +395,8 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @Roles("admin")
   @Get("admin")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Get all deals (admin only)" })
-  @ApiResponse({ status: 200, description: "Return all deals", type: [DealResponseDto] })
+  @ApiOperation({ summary: "Get all deals (admin only) - Optimized with seller profiles and status summaries" })
+  @ApiResponse({ status: 200, description: "Return all deals with seller profiles and stats" })
   @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number for pagination' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Number of items per page' })
@@ -385,7 +412,22 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     @Query('isPublic') isPublic?: string,
     @Query('excludeStatus') excludeStatus?: string,
   ) {
-    return this.dealsService.findAll({ search, buyerResponse, status, isPublic, excludeStatus }, page, limit)
+    // Use optimized endpoint that returns everything in single query
+    return this.dealsService.findAllAdminOptimized(
+      { search, buyerResponse, status, isPublic, excludeStatus },
+      page,
+      limit
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("admin")
+  @Get("admin/stats")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get admin dashboard statistics" })
+  @ApiResponse({ status: 200, description: "Return dashboard statistics" })
+  async getAdminStats() {
+    return this.dealsService.getAdminDashboardStats();
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -421,6 +463,78 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
       throw new UnauthorizedException("User not authenticated");
     }
     return this.dealsService.getCompletedDeals(req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get("loi-deals")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get all LOI (Letter of Intent) deals for the seller" })
+  @ApiResponse({ status: 200, description: "Return LOI deals", type: [DealResponseDto] })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
+  async getLOIDeals(@Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+    return this.dealsService.getSellerLOIDeals(req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller", "admin")
+  @Post(":id/pause-for-loi")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Pause a deal for LOI negotiations" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Deal paused for LOI successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  @ApiResponse({ status: 400, description: "Deal must be active to pause for LOI" })
+  async pauseDealForLOI(
+    @Param("id") dealId: string,
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    const deal = await this.dealsService.moveDealToLOI(
+      dealId,
+      req.user.userId,
+      req.user.role,
+    );
+
+    return {
+      message: "Deal paused for LOI successfully",
+      deal,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller", "admin")
+  @Post(":id/revive-from-loi")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Revive a deal from LOI status back to Active" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Deal revived successfully" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  @ApiResponse({ status: 400, description: "Deal must be in LOI status to revive" })
+  async reviveDealFromLOI(
+    @Param("id") dealId: string,
+    @Request() req: RequestWithUser,
+  ) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    const deal = await this.dealsService.reviveDealFromLOI(
+      dealId,
+      req.user.userId,
+      req.user.role,
+    );
+
+    return {
+      message: "Deal revived successfully",
+      deal,
+    };
   }
   
 
@@ -511,6 +625,28 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller")
+  @Get(":id/ever-active-buyers")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get buyers who ever had this deal in their Active tab (for 'Buyer from CIM Amplify' option)" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return list of buyers who ever had this deal in Active" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
+  async getEverActiveBuyers(@Param("id") dealId: string, @Request() req: RequestWithUser) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated")
+    }
+
+    // Verify the seller owns this deal
+    const deal = await this.dealsService.findOne(dealId)
+    if (deal.seller.toString() !== req.user.userId) {
+      throw new ForbiddenException("You don't have permission to access this deal's buyers")
+    }
+
+    return this.dealsService.getEverActiveBuyers(dealId)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("admin")
   @Get("admin/completed/all")
   @ApiBearerAuth()
@@ -521,8 +657,24 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     if (!req.user?.userId || req.user.role !== "admin") {
       throw new UnauthorizedException("Access denied: admin only.");
     }
-  
+
     return this.dealsService.getAllCompletedDeals();
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("admin")
+  @Get("admin/:id/ever-active-buyers")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get buyers who ever had this deal in their Active tab (admin only)" })
+  @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiResponse({ status: 200, description: "Return list of buyers who ever had this deal in Active" })
+  @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
+  async getEverActiveBuyersAdmin(@Param("id") dealId: string, @Request() req: RequestWithUser) {
+    if (!req.user?.userId || req.user.role !== "admin") {
+      throw new UnauthorizedException("Access denied: admin only.")
+    }
+
+    return this.dealsService.getEverActiveBuyers(dealId)
   }
   
 
@@ -715,60 +867,6 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     }
 
     return this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, body.status, body.notes)
-  }
-
-  // Seller approves a marketplace access request
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller')
-  @Post(':id/approve-access')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Approve a buyer access request for this deal (seller only)' })
-  @ApiParam({ name: 'id', description: 'Deal ID' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        buyerId: { type: 'string', description: 'Buyer ID to approve' },
-      },
-      required: ['buyerId'],
-    },
-  })
-  async approveAccess(
-    @Param('id') dealId: string,
-    @Body() body: { buyerId: string },
-    @Request() req: RequestWithUser,
-  ) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException('User not authenticated');
-    }
-    return this.dealsService.approveAccess(dealId, req.user.userId, body.buyerId);
-  }
-
-  // Seller denies a marketplace access request
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('seller')
-  @Post(':id/deny-access')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Deny a buyer access request for this deal (seller only)' })
-  @ApiParam({ name: 'id', description: 'Deal ID' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        buyerId: { type: 'string', description: 'Buyer ID to deny' },
-      },
-      required: ['buyerId'],
-    },
-  })
-  async denyAccess(
-    @Param('id') dealId: string,
-    @Body() body: { buyerId: string },
-    @Request() req: RequestWithUser,
-  ) {
-    if (!req.user?.userId) {
-      throw new UnauthorizedException('User not authenticated');
-    }
-    return this.dealsService.denyAccess(dealId, req.user.userId, body.buyerId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

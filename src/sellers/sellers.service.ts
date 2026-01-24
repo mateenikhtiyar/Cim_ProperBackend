@@ -6,6 +6,8 @@ import { UpdateSellerDto } from './dto/update-seller.dto';
 import { Seller, SellerDocument } from './schemas/seller.schema';
 import * as bcrypt from "bcrypt";
 import { AuthService } from '../auth/auth.service';
+import { MailService, ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
+import { genericEmailTemplate } from '../mail/generic-email.template';
 
 @Injectable()
 export class SellersService {
@@ -13,14 +15,15 @@ export class SellersService {
 
   constructor(
     @InjectModel(Seller.name) private sellerModel: Model<SellerDocument>,
-    @Inject(forwardRef(() => AuthService)) private authService: AuthService
+    @Inject(forwardRef(() => AuthService)) private authService: AuthService,
+    private readonly mailService: MailService
   ) {}
 
   async create(createSellerDto: RegisterSellerDto): Promise<Seller> {
     try {
       const existingSeller = await this.sellerModel.findOne({ email: createSellerDto.email }).exec();
       if (existingSeller) {
-        throw new ConflictException('Email already exists');
+        throw new ConflictException('An account with this email already exists. Please try logging in instead.');
       }
       // Hash the password before saving
       const hashedPassword = await bcrypt.hash(createSellerDto.password, 10);
@@ -28,9 +31,32 @@ export class SellersService {
         ...createSellerDto,
         password: hashedPassword,
         role: 'seller',
+        isEmailVerified: true, // Auto-verify since we removed email verification
       });
       const savedSeller = await createdSeller.save();
-      await this.authService.sendVerificationEmail(savedSeller);
+      // Send welcome email instead of verification email
+      await this.authService.sendWelcomeEmail(savedSeller, 'seller');
+
+      // Send notification email to canotifications@amp-ven.com
+      const website = savedSeller.website || 'Not provided';
+      const ownerSubject = `New Advisor ${savedSeller.companyName}`;
+      const ownerHtmlBody = genericEmailTemplate(ownerSubject, "John", `
+        <p><b>Company Name</b>: ${savedSeller.companyName}</p>
+        <p><b>Website</b>: ${website}</p>
+        <p><b>Main Contact</b>: ${savedSeller.fullName}</p>
+        <p><b>Main Contact Email</b>: ${savedSeller.email}</p>
+        <p><b>Main Contact Phone</b>: ${savedSeller.phoneNumber || 'Not provided'}</p>
+        <p><b>Title</b>: ${savedSeller.title || 'Not provided'}</p>
+      `);
+
+      await this.mailService.sendEmailWithLogging(
+        "canotifications@amp-ven.com",
+        "admin",
+        ownerSubject,
+        ownerHtmlBody,
+        [ILLUSTRATION_ATTACHMENT],
+      );
+
       return savedSeller;
     } catch (error) {
       this.logger.error(`Error creating seller: ${error.message}`, error.stack);
@@ -91,6 +117,7 @@ export class SellersService {
                   cond: {
                     $and: [
                       { $ne: ["$$this.status", "completed"] },
+                      { $ne: ["$$this.status", "loi"] },
                       {
                         $gt: [
                           {
@@ -115,6 +142,14 @@ export class SellersService {
                 $filter: {
                   input: "$deals",
                   cond: { $eq: ["$$this.status", "completed"] }
+                }
+              }
+            },
+            loiDealsCount: {
+              $size: {
+                $filter: {
+                  input: "$deals",
+                  cond: { $eq: ["$$this.status", "loi"] }
                 }
               }
             },
@@ -148,9 +183,15 @@ export class SellersService {
             role: 1,
             profilePicture: 1,
             createdAt: 1,
+            updatedAt: 1,
             activeDealsCount: 1,
             offMarketDealsCount: 1,
-            allDealsCount: 1
+            loiDealsCount: 1,
+            allDealsCount: 1,
+            referralSource: 1,
+            isEmailVerified: 1,
+            isGoogleAccount: 1,
+            managementPreferences: 1
           }
         }
       ];
@@ -175,6 +216,7 @@ export class SellersService {
                   cond: {
                     $and: [
                       { $ne: ["$$this.status", "completed"] },
+                      { $ne: ["$$this.status", "loi"] },
                       {
                         $gt: [
                           {
@@ -312,6 +354,27 @@ export class SellersService {
           profilePicture: picture || null,
         });
         seller = await newSeller.save();
+
+        // Send notification email to canotifications@amp-ven.com for new advisors
+        const website = seller.website || 'Not provided';
+        const ownerSubject = `New Advisor ${seller.companyName}`;
+        const ownerHtmlBody = genericEmailTemplate(ownerSubject, "John", `
+          <p><b>Company Name</b>: ${seller.companyName}</p>
+          <p><b>Website</b>: ${website}</p>
+          <p><b>Main Contact</b>: ${seller.fullName}</p>
+          <p><b>Main Contact Email</b>: ${seller.email}</p>
+          <p><b>Main Contact Phone</b>: ${seller.phoneNumber || 'Not provided'}</p>
+          <p><b>Title</b>: ${seller.title || 'Not provided'}</p>
+          <p><b>Registration Method</b>: Google OAuth</p>
+        `);
+
+        await this.mailService.sendEmailWithLogging(
+          "canotifications@amp-ven.com",
+          "admin",
+          ownerSubject,
+          ownerHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+        );
       }
       return { seller, isNewUser };
     } catch (error) {

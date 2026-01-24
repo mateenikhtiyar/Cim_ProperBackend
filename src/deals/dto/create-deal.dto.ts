@@ -39,10 +39,20 @@ export class FinancialDetailsDto {
   @IsOptional()
   avgRevenueGrowth?: number
 
+  @ApiProperty({ description: "Net Income currency", example: "USD($)", required: false })
+  @IsString()
+  @IsOptional()
+  netIncomeCurrency?: string
+
   @ApiProperty({ description: "Net profit", example: 200000, required: false })
   @IsNumber()
   @IsOptional()
   netIncome?: number
+
+  @ApiProperty({ description: "Asking Price currency", example: "USD($)", required: false })
+  @IsString()
+  @IsOptional()
+  askingPriceCurrency?: string
 
   @ApiProperty({ description: "Asking price", example: 5000000, required: false })
   @IsNumber()
@@ -136,6 +146,28 @@ export interface DocumentInfo {
   size: number;
   mimetype: string;
   uploadedAt: Date;
+}
+
+export class NdaDocumentDto {
+  @ApiProperty({ description: "Original file name of the NDA", required: true })
+  @IsString()
+  originalName: string;
+
+  @ApiProperty({ description: "Base64 encoded file content", required: true })
+  @IsString()
+  base64Content: string;
+
+  @ApiProperty({ description: "MIME type of the file", required: true })
+  @IsString()
+  mimetype: string;
+
+  @ApiProperty({ description: "File size in bytes", required: true })
+  @IsNumber()
+  size: number;
+
+  @ApiProperty({ description: "Date when the NDA was uploaded", required: false })
+  @IsOptional()
+  uploadedAt?: Date;
 }
 
 export class CreateDealDto {
@@ -251,6 +283,12 @@ export class CreateDealDto {
   @IsArray()
   @IsOptional()
   documents?: DocumentInfo[];
+
+  @ApiProperty({ description: "NDA document for the deal (optional)", type: NdaDocumentDto, required: false })
+  @ValidateNested()
+  @Type(() => NdaDocumentDto)
+  @IsOptional()
+  ndaDocument?: NdaDocumentDto;
 
   // Add seller field - this will be populated by the controller
   @ApiProperty({ description: "Seller ID", required: false })

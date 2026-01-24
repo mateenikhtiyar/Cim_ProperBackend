@@ -17,7 +17,7 @@ import { Seller } from '../sellers/schemas/seller.schema';
 import { v4 as uuidv4 } from 'uuid';
 import { EmailVerification, EmailVerificationDocument } from './schemas/email-verification.schema';
 import { User, User as UserType } from './interfaces/user.interface'; // create if missing
-import { genericEmailTemplate } from '../mail/generic-email.template';
+import { genericEmailTemplate, emailButton } from '../mail/generic-email.template';
 
 
 type VerificationEmailContext = 'initial' | 'resend' | 'login-reminder';
@@ -69,22 +69,7 @@ export class AuthService {
       }
   
       if (user && (await bcrypt.compare(password, user.password))) {
-        // Admin users don't have an isEmailVerified property
-        if (userType !== 'admin' && !user.isEmailVerified) {
-          this.logger.log(`User ${user.email} attempted login but email not verified. Sending reminder...`);
-          
-          try {
-            await this.sendVerificationEmail(user, { context: 'login-reminder' });
-            this.logger.log(`Login reminder verification email sent to ${user.email}`);
-          } catch (sendError) {
-            this.logger.error(
-              `Failed to send login reminder verification email to ${user.email}: ${sendError.message}`,
-              sendError.stack,
-            );
-          }
-          
-          throw new UnauthorizedException('Please verify your email before logging in. A verification email has been sent to your inbox.');
-        }
+        // Email verification is no longer required - allow login regardless of verification status
         const result = user.toObject ? user.toObject() : { ...user };
         delete result.password;
         return result;
@@ -94,6 +79,21 @@ export class AuthService {
       this.logger.error(`Validation error: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  private generateTokens(payload: { email: string; sub: string; role: string }) {
+    const accessToken = this.jwtService.sign(payload, {
+      expiresIn: '1d', // Access token expires in 1 day
+    });
+
+    const refreshToken = this.jwtService.sign(
+      { ...payload, type: 'refresh' },
+      {
+        expiresIn: '7d', // Refresh token expires in 7 days
+      }
+    );
+
+    return { accessToken, refreshToken };
   }
 
   async login(user: any) {
@@ -109,8 +109,12 @@ export class AuthService {
         role: user.role || "buyer"
       };
 
+      const { accessToken, refreshToken } = this.generateTokens(payload);
+
       return {
-        access_token: this.jwtService.sign(payload),
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 86400, // 1 day in seconds
         user: {
           id: userId,
           email: user.email,
@@ -128,6 +132,33 @@ export class AuthService {
     }
   }
 
+  async refreshToken(refreshToken: string) {
+    try {
+      const decoded = this.jwtService.verify(refreshToken);
+
+      if (decoded.type !== 'refresh') {
+        throw new UnauthorizedException('Invalid token type');
+      }
+
+      const payload = {
+        email: decoded.email,
+        sub: decoded.sub,
+        role: decoded.role,
+      };
+
+      const { accessToken, refreshToken: newRefreshToken } = this.generateTokens(payload);
+
+      return {
+        access_token: accessToken,
+        refresh_token: newRefreshToken,
+        expires_in: 86400, // 1 day in seconds
+      };
+    } catch (error) {
+      this.logger.error(`Refresh token error: ${error.message}`, error.stack);
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+  }
+
   async loginAdmin(admin: any) {
     try {
       const adminId = admin._id?.toString() || admin.id?.toString();
@@ -141,8 +172,12 @@ export class AuthService {
         role: "admin"
       };
 
+      const { accessToken, refreshToken } = this.generateTokens(payload);
+
       return {
-        access_token: this.jwtService.sign(payload),
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 86400, // 1 day in seconds
         user: {
           id: adminId,
           email: admin.email,
@@ -169,8 +204,12 @@ export class AuthService {
         role: "seller"
       };
 
+      const { accessToken, refreshToken } = this.generateTokens(payload);
+
       return {
-        access_token: this.jwtService.sign(payload),
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 86400, // 1 day in seconds
         user: {
           id: sellerId,
           email: seller.email,
@@ -204,10 +243,13 @@ export class AuthService {
         role: "seller",
       };
 
-      const token = this.jwtService.sign(payload);
+      // Generate both access and refresh tokens for Google OAuth
+      const { accessToken, refreshToken } = this.generateTokens(payload);
 
       return {
-        access_token: token,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 86400, // 1 day in seconds
         isNewUser,
         user: {
           ...(seller.toObject ? seller.toObject() : seller),
@@ -238,10 +280,13 @@ export class AuthService {
         role: (buyer as any).role || "buyer",
       };
 
-      const token = this.jwtService.sign(payload);
+      // Generate both access and refresh tokens for Google OAuth
+      const { accessToken, refreshToken } = this.generateTokens(payload);
 
       return {
-        access_token: token,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 86400, // 1 day in seconds
         isNewUser,
         user: {
           ...(buyer.toObject ? buyer.toObject() : buyer),
@@ -415,6 +460,64 @@ async sendVerificationEmail(user: User, options: { context?: VerificationEmailCo
   this.logger.debug(`Triggered verification email (context: ${context}) for ${user.email}`);
 }
 
+async sendWelcomeEmail(user: User, role: 'buyer' | 'seller') {
+  this.logger.debug(`Preparing to send welcome email for ${role}: ${user.email}`);
+
+  // Use full name for a more personal touch
+  const recipientName = user.fullName || 'there';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://app.cimamplify.com';
+
+  let roleSpecificContent = '';
+
+  if (role === 'buyer') {
+    roleSpecificContent = `
+      <p>As a buyer on CIM Amplify, you'll receive these benefits:</p>
+      <ul style="margin: 16px 0; padding-left: 20px;">
+        <li style="margin-bottom: 8px;">M&A Advisors personally invite you to deals that match your criteria</li>
+        <li style="margin-bottom: 8px;">No scrolling  — Directly receive deals in your inbox matched to your criteria</li>
+        <li style="margin-bottom: 8px;">Exclusive deals because we reward Advisors who post exclusively with us</li>
+        <li style="margin-bottom: 8px;">0.5% (50 basis points) buyer fee. By far the lowest in the industry</li>
+        <li style="margin-bottom: 8px;">We get out of the way – no requirement to communicate through the platform</li>
+        <li style="margin-bottom: 8px;">All deals at least $1 Million in EBITDA or $5 Million in revenue</li>
+      </ul>
+      <p>Please to make sure you complete your investment profile so we can match you with the best opportunities.</p>
+      ${emailButton('Go to Buyer Dashboard', `${frontendUrl}/buyer/login`)}
+    `;
+  } else {
+    roleSpecificContent = `
+      <p>As an advisor on CIM Amplify, you'll have these benefits:</p>
+      <ul style="margin: 16px 0; padding-left: 20px;">
+        <li style="margin-bottom: 8px;">We thank you with a gift for every deal posted</li>
+        <li style="margin-bottom: 8px;">To ensure confidentiality you select which, criteria matched, buyers to invite</li>
+        <li style="margin-bottom: 8px;">We do not compete against you - No off market or direct deals</li>
+        <li style="margin-bottom: 8px;">No tire kickers! Set "Ability to Close" filters for every deal</li>
+        <li style="margin-bottom: 8px;">Free deal management platform to see buyer matches and activity in one place</li>
+      </ul>
+      <p>To get started, head to your dashboard and create your first deal.</p>
+      ${emailButton('Go to Advisor Dashboard', `${frontendUrl}/seller/dashboard`)}
+    `;
+  }
+
+  const emailContent = `
+    <p>Welcome to CIM Amplify! We're excited to have you join our platform.</p>
+    ${roleSpecificContent}
+    <p>If you have any questions, feel free to reply to this email or visit our FAQ section.</p>
+    <p>We look forward to helping you with your deal-making journey!</p>
+  `.trim();
+
+  const emailBody = genericEmailTemplate('Welcome to CIM Amplify!', recipientName, emailContent);
+
+  await this.mailService.sendEmailWithLogging(
+    user.email,
+    role,
+    'Test Email From CIM Amplify',
+    emailBody,
+    [ILLUSTRATION_ATTACHMENT],
+  );
+
+  this.logger.debug(`Test email sent to ${role}: ${user.email}`);
+}
+
   private resolveRecipientType(user: User): string {
     if (user?.role === 'seller') {
       return 'seller';
@@ -428,15 +531,7 @@ async sendVerificationEmail(user: User, options: { context?: VerificationEmailCo
   }
 
   private buildVerificationEmailContent(context: VerificationEmailContext, verificationLink: string): VerificationEmailCopy {
-    const buttonMarkup = `
-      <table border="0" cellpadding="0" cellspacing="0" style="margin: 24px 0;">
-          <tr>
-              <td align="center" style="border-radius: 5px; background-color: #3aafa9;">
-                  <a href="${verificationLink}" target="_blank" style="font-size: 16px; color: #ffffff; text-decoration: none; padding: 12px 25px; border-radius: 5px; display: inline-block;">Verify Your Email Address</a>
-              </td>
-          </tr>
-      </table>
-    `.trim();
+    const buttonMarkup = emailButton('Verify Your Email Address', verificationLink);
 
     if (context === 'login-reminder') {
       return {
@@ -467,7 +562,7 @@ async sendVerificationEmail(user: User, options: { context?: VerificationEmailCo
     };
   }
 
-async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string; userId?: string; fullName?: string }> {
+async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string | null; accessToken?: string; refreshToken?: string; expiresIn?: number; userId?: string; fullName?: string }> {
   this.logger.debug(`Attempting to verify token: ${token}`);
   const emailVerification = await this.emailVerificationModel.findOne({ token }).exec();
 
@@ -517,10 +612,11 @@ async verifyEmailToken(token: string): Promise<{ verified: boolean; role: string
 
   if (user && role) {
     const payload = { email: user.email, sub: user._id.toString(), role };
-    const accessToken = this.jwtService.sign(payload);
-    this.logger.debug(`User ${user.email} successfully verified. Access token generated.`);
+    // Generate both access and refresh tokens for email verification
+    const { accessToken, refreshToken } = this.generateTokens(payload);
+    this.logger.debug(`User ${user.email} successfully verified. Access and refresh tokens generated.`);
     this.logger.debug(`User object before returning: ${JSON.stringify(user)}`);
-    return { verified: true, role, accessToken, userId: user._id.toString(), fullName: user.fullName };
+    return { verified: true, role, accessToken, refreshToken, expiresIn: 86400, userId: user._id.toString(), fullName: user.fullName };
   }
 
   this.logger.debug(`Verification failed: User not found for userId: ${userId}`);

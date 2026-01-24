@@ -11,7 +11,7 @@ import { CompanyProfile, CompanyProfileDocument } from "../company-profile/schem
 
 import { AuthService } from "../auth/auth.service";
 import { MailService, ILLUSTRATION_ATTACHMENT } from "../mail/mail.service";
-import { genericEmailTemplate } from "../mail/generic-email.template";
+import { genericEmailTemplate, emailButton } from "../mail/generic-email.template";
 
 @Injectable()
 export class BuyersService {
@@ -62,13 +62,13 @@ export class BuyersService {
       const emailContent = `
         <p>If you have run into any issues please reply to this email with what is happening and we will help to solve the problem.</p>
         <p>If you did not receive a validation email from us please use this link to request a new one: </p>
-        
-        <p><a href="https://app.cimamplify.com/resend-verification" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Resend Verification Email</a></p>
+
+        ${emailButton('Resend Verification Email', `${process.env.FRONTEND_URL}/resend-verification`)}
 
         <p>Then check your inbox or spam for an email from deals@amp-ven.com</p>
 
         <p style="color: red;"><b>If you don't plan to complete your profile please reply delete to this email and we will remove your registration.</b></p>
-       
+
         <p>If you have questions check out our FAQ section at https://cimamplify.com/#FAQs or reply to this email.</p>
       `;
 
@@ -89,7 +89,7 @@ export class BuyersService {
 
     const existingBuyer = await this.buyerModel.findOne({ email }).exec();
     if (existingBuyer) {
-      throw new ConflictException("Email already exists");
+      throw new ConflictException("An account with this email already exists. Please try logging in instead.");
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -97,6 +97,7 @@ export class BuyersService {
     const newBuyer = new this.buyerModel({
       ...createBuyerDto,
       password: hashedPassword,
+      isEmailVerified: true, // Auto-verify since we removed email verification
     });
 
     let savedBuyer = await newBuyer.save();
@@ -112,7 +113,8 @@ export class BuyersService {
     savedBuyer.companyProfileId = savedCompanyProfile._id as Types.ObjectId;
     savedBuyer = await savedBuyer.save();
 
-    await this.authService.sendVerificationEmail(savedBuyer);
+    // Send welcome email instead of verification email
+    await this.authService.sendWelcomeEmail(savedBuyer, 'buyer');
 
     // Notify project owner
     const ownerSubject = `New Buyer ${savedBuyer.companyName}`;
@@ -499,12 +501,82 @@ export class BuyersService {
       throw new NotFoundException("Buyer not found");
     }
 
-    if (updateBuyerDto.password) {
-      updateBuyerDto.password = await bcrypt.hash(updateBuyerDto.password, 10);
+    // Create a clean update object, removing fields that shouldn't be updated directly
+    const updateData: any = { ...updateBuyerDto };
+
+    // Remove read-only fields
+    delete updateData._id;
+    delete updateData.role;
+
+    // Handle phoneNumber -> phone mapping (frontend uses phoneNumber, schema uses phone)
+    if (updateData.phoneNumber !== undefined) {
+      updateData.phone = updateData.phoneNumber;
+      delete updateData.phoneNumber;
     }
 
-    Object.assign(buyer, updateBuyerDto);
-    return buyer.save();
+    // Hash password if being updated, otherwise remove it to prevent overwriting
+    if (updateData.password && updateData.password.trim() !== '') {
+      updateData.password = await bcrypt.hash(updateData.password, 10);
+    } else {
+      delete updateData.password;
+    }
+
+    // Remove undefined/null values to prevent overwriting existing data
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] === undefined) {
+        delete updateData[key];
+      }
+    });
+
+    // Only update fields that are actually provided
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] !== undefined) {
+        buyer[key] = updateData[key];
+      }
+    });
+
+    await buyer.save();
+
+    // Sync to company profile if exists
+    if (buyer.companyProfileId) {
+      const companyProfile = await this.companyProfileModel.findById(buyer.companyProfileId).exec();
+      if (companyProfile) {
+        let profileUpdated = false;
+
+        // Update company-level fields
+        if (updateData.companyName) {
+          companyProfile.companyName = updateData.companyName;
+          profileUpdated = true;
+        }
+        if (updateData.website) {
+          companyProfile.website = updateData.website;
+          profileUpdated = true;
+        }
+
+        // Update first contact with buyer info
+        if (updateData.fullName || updateData.email || updateData.phone) {
+          if (!companyProfile.contacts || companyProfile.contacts.length === 0) {
+            companyProfile.contacts = [{
+              name: updateData.fullName || buyer.fullName || '',
+              email: updateData.email || buyer.email || '',
+              phone: updateData.phone || buyer.phone || ''
+            }];
+          } else {
+            // Update first contact
+            if (updateData.fullName) companyProfile.contacts[0].name = updateData.fullName;
+            if (updateData.email) companyProfile.contacts[0].email = updateData.email;
+            if (updateData.phone) companyProfile.contacts[0].phone = updateData.phone;
+          }
+          profileUpdated = true;
+        }
+
+        if (profileUpdated) {
+          await companyProfile.save();
+        }
+      }
+    }
+
+    return buyer;
   }
 
   async remove(id: string): Promise<void> {

@@ -1,3 +1,13 @@
+// Helper function to create a styled button link for emails
+export const emailButton = (text: string, href: string, color: string = '#3aafa9') => `
+<a href="${href}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: ${color}; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px; margin: 8px 0; text-align: center;">${text}</a>
+`;
+
+// Helper function to create a secondary/outline button
+export const emailButtonOutline = (text: string, href: string, color: string = '#3aafa9') => `
+<a href="${href}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: transparent; color: ${color}; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px; margin: 8px 0; text-align: center; border: 2px solid ${color};">${text}</a>
+`;
+
 export const genericEmailTemplate = (title: string, name: string, htmlContent: string) => `
 <!DOCTYPE html>
 <html lang="en">

@@ -93,6 +93,10 @@ export class Seller {
   @Prop({ default: false })
   hideGuidelines: boolean
 
+  @ApiProperty({ description: "How the user heard about CIM Amplify" })
+  @Prop({ required: false, default: "" })
+  referralSource: string
+
   // Add any additional fields needed
 
   // Ensure Mongoose methods are properly typed

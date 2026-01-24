@@ -20,7 +20,7 @@ export class LocalStrategy extends PassportStrategy(Strategy) {
 
     const user = await this.authService.validateUser(email, password, userType as "buyer" | "seller" | "admin")
     if (!user) {
-      throw new UnauthorizedException("Invalid credentials")
+      throw new UnauthorizedException("Invalid email or password. Please check your credentials and try again.")
     }
     return user
   }

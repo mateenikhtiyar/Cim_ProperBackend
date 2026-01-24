@@ -9,8 +9,6 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   constructor(private authService: AuthService, private configService: ConfigService) {
     const clientID = configService.get<string>('GOOGLE_CLIENT_ID');
     const clientSecret = configService.get<string>('GOOGLE_CLIENT_SECRET');
-    console.log('Google Client ID:', clientID); // Debug log
-    console.log('Google Client Secret:', clientSecret); // Debug log
 
     if (!clientID || !clientSecret) {
       throw new Error('Google OAuth credentials are missing');

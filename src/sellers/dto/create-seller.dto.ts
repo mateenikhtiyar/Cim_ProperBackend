@@ -68,4 +68,9 @@ export class RegisterSellerDto {
   @IsString()
   @IsOptional()
   managementPreferences?: string;
+
+  @ApiProperty({ example: "LinkedIn", description: "How the user heard about CIM Amplify" })
+  @IsString()
+  @IsOptional()
+  referralSource?: string;
 }
