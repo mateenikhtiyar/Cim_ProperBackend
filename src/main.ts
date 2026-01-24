@@ -65,25 +65,10 @@ async function bootstrap() {
   ].filter(Boolean);
   
   app.enableCors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, Postman, etc.)
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-      
-      // Check if origin is allowed
-      const isAllowed = allowedOrigins.some(allowed => 
-        allowed && (origin.includes(allowed) || origin === allowed || origin.includes('.vercel.app'))
-      );
-      
-      if (isAllowed) {
-        callback(null, true);
-      } else {
-        callback(null, true); // Allow all for now, restrict in production
-      }
-    },
+    origin: true, // Allow all origins for now
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   })
   // Setup Swagger with CDN assets for Vercel
   const config = new DocumentBuilder()
