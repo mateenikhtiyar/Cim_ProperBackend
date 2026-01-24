@@ -2,7 +2,7 @@ import { ApiProperty } from "@nestjs/swagger"
 import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max } from "class-validator"
 import { Type } from "class-transformer"
 import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
-import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto } from "./create-deal.dto"
+import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto, NdaDocumentDto } from "./create-deal.dto"
 
 export class UpdateBuyerFitDto {
   @ApiProperty({
@@ -151,6 +151,12 @@ export class UpdateDealDto {
   @IsOptional()
   documents?: string[]
 
+  @ApiProperty({ description: "NDA document for the deal (optional, null to remove)", type: NdaDocumentDto, required: false })
+  @ValidateNested()
+  @Type(() => NdaDocumentDto)
+  @IsOptional()
+  ndaDocument?: NdaDocumentDto | null;
+
   @ApiProperty({ description: "Final sale price (for completed deals)", example: 4800000, required: false })
   @IsNumber()
   @IsOptional()
@@ -160,4 +166,19 @@ export class UpdateDealDto {
   @IsBoolean()
   @IsOptional()
   hideGuidelines?: boolean;
+
+  @ApiProperty({ description: "The buyer (ObjectId) the deal was closed with, if from CIM Amplify", required: false })
+  @IsString()
+  @IsOptional()
+  closedWithBuyer?: string | null;
+
+  @ApiProperty({ description: "The company name of the buyer the deal was closed with", required: false })
+  @IsString()
+  @IsOptional()
+  closedWithBuyerCompany?: string;
+
+  @ApiProperty({ description: "The email of the buyer the deal was closed with", required: false })
+  @IsString()
+  @IsOptional()
+  closedWithBuyerEmail?: string;
 }

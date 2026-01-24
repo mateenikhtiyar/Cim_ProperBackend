@@ -8,6 +8,7 @@ export enum DealStatus {
   DRAFT = "draft",
   PENDING = "pending",
   ACTIVE = "active",
+  LOI = "loi",
   COMPLETED = "completed",
   REJECTED = "rejected",
 }
@@ -61,9 +62,17 @@ class FinancialDetails {
   @Prop({ required: false })
   avgRevenueGrowth?: number
 
+  @ApiProperty({ description: "Net Income currency", example: "USD($)" })
+  @Prop({ required: false })
+  netIncomeCurrency?: string
+
   @ApiProperty({ description: "Net profit", example: 200000 })
   @Prop({ required: false })
   netIncome?: number
+
+  @ApiProperty({ description: "Asking Price currency", example: "USD($)" })
+  @Prop({ required: false })
+  askingPriceCurrency?: string
 
   @ApiProperty({ description: "Asking price", example: 5000000 })
   @Prop({ required: false })
@@ -166,6 +175,29 @@ class DealDocument {
   uploadedAt: Date
 }
 
+@Schema()
+class NdaDocument {
+  @ApiProperty({ description: "Original file name of the NDA" })
+  @Prop({ required: true })
+  originalName: string
+
+  @ApiProperty({ description: "Base64 encoded file content" })
+  @Prop({ required: true })
+  base64Content: string
+
+  @ApiProperty({ description: "MIME type of the file" })
+  @Prop({ required: true })
+  mimetype: string
+
+  @ApiProperty({ description: "File size in bytes" })
+  @Prop({ required: true })
+  size: number
+
+  @ApiProperty({ description: "Date when the NDA was uploaded" })
+  @Prop({ default: Date.now })
+  uploadedAt: Date
+}
+
 @Schema({ timestamps: true })
 export class Deal {
   @ApiProperty({ description: "Title of the deal" })
@@ -245,6 +277,14 @@ export class Deal {
   @Prop({ type: [MongooseSchema.Types.ObjectId], ref: "Buyer", default: [] })
   interestedBuyers!: string[]
 
+  @ApiProperty({ description: "Buyers who ever had this deal in their Active tab (even if later rejected/passed)", type: [String] })
+  @Prop({ type: [MongooseSchema.Types.ObjectId], ref: "Buyer", default: [] })
+  everActiveBuyers!: string[]
+
+  @ApiProperty({ description: "Buyers who have hidden this deal from their marketplace view", type: [String] })
+  @Prop({ type: [MongooseSchema.Types.ObjectId], ref: "Buyer", default: [] })
+  hiddenByBuyers!: string[]
+
   @ApiProperty({ description: "Tags for categorizing the deal", example: ["growth opportunity", "recurring revenue"] })
   @Prop({ type: [String], default: [] })
   tags!: string[]
@@ -264,6 +304,16 @@ export class Deal {
   @ApiProperty({ description: "Documents uploaded for the deal", type: [DealDocument] })
   @Prop({ type: [Object], default: [] })
   documents!: DealDocument[]
+
+  @ApiProperty({ description: "NDA document for the deal (optional)", type: NdaDocument })
+  @Prop({ type: Object, required: false })
+  ndaDocument?: {
+    originalName: string;
+    base64Content: string;
+    mimetype: string;
+    size: number;
+    uploadedAt: Date;
+  }
 
   @ApiProperty({ description: "Deal slug for SEO-friendly URLs" })
   @Prop({ required: false })
@@ -319,19 +369,34 @@ export class Deal {
   @ApiProperty({ description: "Flag to hide deal guidelines modal for the user", default: false })
   @Prop({ default: false })
   hideGuidelines?: boolean;
+
+  @ApiProperty({ description: "Flag indicating if this deal was in LOI status before being closed", default: false })
+  @Prop({ default: false })
+  wasLOIDeal?: boolean;
 }
 
 export const DealSchema = SchemaFactory.createForClass(Deal)
 
 // Add index for better search performance
-DealSchema.index({ title: "text", companyDescription: "text", tags: "text" })
+DealSchema.index({ title: "text", companyDescription: "text", tags: "text", industrySector: "text" })
 
+// Single field indexes
 DealSchema.index({ seller: 1 });
 DealSchema.index({ status: 1 });
+DealSchema.index({ isPublic: 1 });
+DealSchema.index({ createdAt: -1 });
 DealSchema.index({ "timeline.completedAt": -1 });
+DealSchema.index({ "timeline.updatedAt": -1 });
 DealSchema.index({ targetedBuyers: 1 });
 DealSchema.index({ interestedBuyers: 1 });
+DealSchema.index({ everActiveBuyers: 1 });
 DealSchema.index({ "invitationStatus.$**": 1 });
+
+// Compound indexes for admin dashboard queries
+DealSchema.index({ status: 1, "timeline.updatedAt": -1 }); // For active/completed deals sorted by update
+DealSchema.index({ status: 1, createdAt: -1 }); // For deals sorted by creation date
+DealSchema.index({ seller: 1, status: 1 }); // For seller's deals by status
+DealSchema.index({ isPublic: 1, status: 1 }); // For marketplace deals
 
 // Add createdAt and updatedAt timestamps
 DealSchema.pre("save", function (next) {

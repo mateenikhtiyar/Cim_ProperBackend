@@ -50,6 +50,26 @@ export class AuthController {
     return this.authService.loginSeller(req.user);
   }
 
+  @Post('refresh')
+  @ApiOperation({ summary: 'Refresh access token using refresh token' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        refresh_token: { type: 'string', description: 'The refresh token' },
+      },
+      required: ['refresh_token'],
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Tokens refreshed successfully' })
+  @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
+  async refreshToken(@Body('refresh_token') refreshToken: string) {
+    if (!refreshToken) {
+      throw new BadRequestException('Refresh token is required');
+    }
+    return this.authService.refreshToken(refreshToken);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   @ApiBearerAuth()
@@ -124,9 +144,9 @@ export class AuthController {
   @Get('verify-email')
   async verifyEmail(@Query('token') token: string, @Res() res: Response) {
     try {
-      const { verified, role, accessToken, userId, fullName } = await this.authService.verifyEmailToken(token);
+      const { verified, role, accessToken, refreshToken, userId, fullName } = await this.authService.verifyEmailToken(token);
       if (verified) {
-        const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-success?token=${accessToken}&role=${role}&userId=${userId}&fullName=${encodeURIComponent(fullName || '')}`;
+        const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-success?token=${accessToken}&refreshToken=${refreshToken}&role=${role}&userId=${userId}&fullName=${encodeURIComponent(fullName || '')}`;
         return res.redirect(redirectUrl);
       } else {
         const redirectUrl = `${process.env.FRONTEND_URL}/verify-email-failure`;

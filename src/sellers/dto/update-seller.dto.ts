@@ -69,4 +69,12 @@ export class UpdateSellerDto {
   @IsOptional()
   @IsBoolean()
   hideGuidelines?: boolean;
+
+  @ApiPropertyOptional({
+    example: "https://example.com/profile.jpg",
+    description: "Profile picture URL or base64 encoded image"
+  })
+  @IsOptional()
+  @IsString()
+  profilePicture?: string | null;
 }

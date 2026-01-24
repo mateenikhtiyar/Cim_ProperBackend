@@ -7,7 +7,7 @@ import { Model, Types } from 'mongoose';
 import { Seller, SellerDocument } from '../sellers/schemas/seller.schema';
 import { Buyer, BuyerDocument } from '../buyers/schemas/buyer.schema';
 import { DealDocumentType } from '../deals/schemas/deal.schema';
-import { genericEmailTemplate } from '../mail/generic-email.template';
+import { genericEmailTemplate, emailButton } from '../mail/generic-email.template';
 import { ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
 import { join } from 'path';
 import { EmailVerification, EmailVerificationDocument } from '../auth/schemas/email-verification.schema';
@@ -81,8 +81,8 @@ export class CronService {
         const emailContent = `
           <p>If you have run into any issues please reply to this email with what is happening and we will help to solve the problem.</p>
           <p>If you did not receive a validation email from us please use this link to request a new one: </p>
-          
-          <p><a href="https://app.cimamplify.com/resend-verification" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">Resend Verification Email</a></p>
+
+          ${emailButton('Resend Verification Email', `${process.env.FRONTEND_URL}/resend-verification`)}
 
           <p>Then check your inbox or spam for an email from deals@amp-ven.com</p>
 
@@ -139,7 +139,8 @@ export class CronService {
 
         const subject = `Update on ${deal.title} from CIM Amplify`;
         const emailContent = `
-          <p>You have ${summary.summary.totalActive} Active, ${summary.summary.totalPending} Pending and ${summary.summary.totalRejected} Passed buyers on <a href="${process.env.FRONTEND_URL}/seller/login">CIM Amplify</a>.</p>
+          <p>You have ${summary.summary.totalActive} Active, ${summary.summary.totalPending} Pending and ${summary.summary.totalRejected} Passed buyers on CIM Amplify.</p>
+          ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/seller/dashboard`)}
           <p>We are always adding new buyers that may be a match. To watch for new matches simply click Activity on the deal card and then click on the <b>Invite More Buyers</b> button.</p>
           <p>Please help us to keep the platform up to date by clicking the <b>Off Market button</b> when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
         `;
@@ -161,8 +162,8 @@ export class CronService {
       if (activeDeals.length === 0) {
         const subject = 'Don’t forget to add your new deals over $1 million in EBITDA to CIM Amplify';
         const emailContent = `
-          <p>CIM Amplify buyers are incredibly active and we are adding new buyers constantly. Let’s help your clients to find a great buyer together!</p>
-          <p>Log in to your <a href="${process.env.FRONTEND_URL}/seller/login">membership portal</a> to add your deals.</p>
+          <p>CIM Amplify buyers are incredibly active and we are adding new buyers constantly. Let's help your clients to find a great buyer together!</p>
+          ${emailButton('Add Your Deals', `${process.env.FRONTEND_URL}/seller/dashboard`)}
         `;
 
         const emailBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], emailContent);
@@ -183,7 +184,8 @@ export class CronService {
       if (pendingDeals.length > 0) {
         const subject = 'You Have at Least One Deal Pending on CIM Amplify';
         const emailContent = `
-          <p>Please keep your <a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a> up to date by moving Pending deals to either <b>Pass</b> or <b>Move to Active<b/>.</p>
+          <p>Please keep your dashboard up to date by moving Pending deals to either <b>Pass</b> or <b>Move to Active</b>.</p>
+          ${emailButton('View Pending Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
         `;
 
         const emailBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
@@ -207,7 +209,8 @@ export class CronService {
     for (const buyer of buyers) {
       const subject = 'Please Make Sure Your CIM Amplify Target Criteria is Up to Date';
       const emailContent = `
-        <p>Don’t miss deals that fit your updated criteria! Head to your member <a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a> and click on Company Profile to make sure your information is up to date.</p>
+        <p>Don't miss deals that fit your updated criteria! Head to your member dashboard and click on Company Profile to make sure your information is up to date.</p>
+        ${emailButton('Update Your Profile', `${process.env.FRONTEND_URL}/buyer/profile`)}
       `;
 
       const emailBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);

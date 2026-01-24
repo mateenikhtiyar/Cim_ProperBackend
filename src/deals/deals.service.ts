@@ -12,7 +12,7 @@ import { expandCountryOrRegion } from '../common/geography-hierarchy';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsOptional } from 'class-validator';
 import { MailService } from '../mail/mail.service';
-import { genericEmailTemplate } from '../mail/generic-email.template';
+import { genericEmailTemplate, emailButton } from '../mail/generic-email.template';
 import { ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
 
 
@@ -65,7 +65,8 @@ export class DealsService {
         const emailContent = `
           <p>Dear ${seller.fullName},</p>
           <p>We are truly excited to help you find a great buyer for your deal.</p>
-          <p>We will let you know via email when your selected buyers change from pending to viewed to pass. You can also check your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a> at any time to see buyer activity.</p>
+          <p>We will let you know via email when your selected buyers change from pending to active to pass. You can also check your dashboard at any time to see buyer activity.</p>
+          ${emailButton('Go to Dashboard', `${process.env.FRONTEND_URL}/seller/dashboard`)}
           <p>Please help us to keep the platform up to date by clicking the <b>Off Market button</b> when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
           <p>Finally, If your deal did not fetch any buyers, we are always adding new buyers that may match in the future. To watch for new matches simply click Activity on the deal card and then click on the <b>Invite More Buyers</b> button.</p>
         `;
@@ -103,7 +104,7 @@ export class DealsService {
         [ILLUSTRATION_ATTACHMENT],
         (savedDeal._id as Types.ObjectId).toString(),
       );
-      
+
       return savedDeal
     } catch (error) {
       console.error("Error creating deal:", error)
@@ -129,7 +130,7 @@ export class DealsService {
 
     // Handle status filtering - this needs to be done carefully to avoid conflicts
     let statusFilterApplied = false;
-    
+
     if (filters.buyerResponse === 'accepted') {
       query['$expr'] = {
         '$gt': [
@@ -145,39 +146,40 @@ export class DealsService {
           0
         ]
       };
-      query.status = { $ne: 'completed' }; // Exclude completed deals from active deals
+      query.status = { $nin: ['completed', 'loi'] }; // Exclude completed and LOI deals from active deals
       statusFilterApplied = true;
     }
 
     // Handle status filtering
     if (filters.status && !statusFilterApplied) {
       if (filters.status === 'active') {
-        // For active status, exclude completed deals
-        query.status = { $ne: 'completed' };
+        // For active status, exclude completed and LOI deals
+        query.status = { $nin: ['completed', 'loi'] };
       } else {
         query.status = filters.status;
       }
       statusFilterApplied = true;
     }
-    
+
     // Handle excludeStatus parameter - only apply if status filter wasn't applied
+    // This is used for "All Deals" view which shows Active + LOI deals (excludes only completed/off-market)
     if (filters.excludeStatus && !statusFilterApplied) {
       query.status = { $ne: filters.excludeStatus };
     }
-  
+
     if (filters.isPublic !== undefined) {
       query.isPublic = filters.isPublic === 'true';
     }
-  
+
     const deals = await this.dealModel.find(query).skip(skip).limit(limit).exec();
     const totalDeals = await this.dealModel.countDocuments(query).exec();
-  
+
     // Add buyer status counts for each deal
     const dealsWithCounts = await Promise.all(deals.map(async (deal) => {
       try {
         // Get the buyer status summary for this deal
         const statusSummary = await this.getDealWithBuyerStatusSummary((deal as any)._id.toString());
-        
+
         // Add buyer counts to the deal object
         return {
           ...deal.toObject(),
@@ -199,7 +201,7 @@ export class DealsService {
         };
       }
     }));
-    
+
     return {
       data: dealsWithCounts,
       total: totalDeals,
@@ -209,6 +211,19 @@ export class DealsService {
   }
 
   async findBySeller(sellerId: string): Promise<Deal[]> {
+    return this.dealModel
+      .find({
+        seller: sellerId,
+        status: { $nin: [DealStatus.COMPLETED, DealStatus.LOI] },
+      })
+      .exec()
+  }
+
+  /**
+   * Get ALL deals for a seller (for admin "All deals" view)
+   * Excludes only completed deals but includes LOI deals
+   */
+  async findAllDealsBySeller(sellerId: string): Promise<Deal[]> {
     return this.dealModel
       .find({
         seller: sellerId,
@@ -258,29 +273,42 @@ export class DealsService {
       throw new ForbiddenException('This deal is not listed in the marketplace');
     }
 
-    // Add buyer to targetedBuyers so it shows in seller dashboard requests
+    // Add buyer to targetedBuyers so it shows in seller dashboard
     if (!deal.targetedBuyers.map(String).includes(buyerId)) {
       deal.targetedBuyers.push(buyerId);
     }
 
-    // Create/update invitationStatus entry as requested (not yet visible to buyer tabs)
+    // Add buyer to interestedBuyers (Active buyers)
+    if (!deal.interestedBuyers.map(String).includes(buyerId)) {
+      deal.interestedBuyers.push(buyerId);
+    }
+
+    // Track that this buyer has ever had the deal in Active (for "Buyer from CIM Amplify" dropdown)
+    if (!deal.everActiveBuyers) {
+      deal.everActiveBuyers = [];
+    }
+    if (!deal.everActiveBuyers.map(String).includes(buyerId)) {
+      deal.everActiveBuyers.push(buyerId);
+    }
+
+    // Set status directly to 'accepted' so deal goes to buyer's Active tab immediately
     const current = deal.invitationStatus.get(buyerId);
     deal.invitationStatus.set(buyerId, {
       invitedAt: current?.invitedAt || new Date(),
       respondedAt: new Date(),
-      response: 'requested',
-      notes: 'Marketplace access requested',
+      response: 'accepted',
+      notes: 'Moved to Active from marketplace',
       decisionBy: 'buyer',
     });
 
-    // Log a view interaction for traceability
+    // Log interaction for traceability
     const dealTrackingModel = this.dealModel.db.model('DealTracking');
     const tracking = new dealTrackingModel({
       deal: dealId,
       buyer: buyerId,
       interactionType: 'view',
       timestamp: new Date(),
-      notes: 'Marketplace access requested',
+      notes: 'Buyer moved deal to Active from marketplace',
       metadata: { source: 'marketplace' },
     });
     await tracking.save();
@@ -288,31 +316,134 @@ export class DealsService {
     deal.timeline.updatedAt = new Date();
     await deal.save();
 
-    // Notify seller via email
-    const seller = await this.sellerModel.findById(deal.seller).exec();
-    const buyer = await this.buyerModel.findById(buyerId).exec();
-    if (seller && buyer) {
-      const subject = `Marketplace access request for ${deal.title}`;
-      const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
-        <p>${buyer.fullName} at ${buyer.companyName} has requested access to <strong>${deal.title}</strong> from the public marketplace.</p>
-        <p>To review this request login to your dashboard and click on Activity for this deal.</p>
-        <p>
-          <a href="https://app.cimamplify.com/seller/dashboard" style="background-color: #3aafa9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
-            Open Advisor Dashboard
-          </a>
-        </p>
-      `);
-      await this.mailService.sendEmailWithLogging(
-        seller.email,
-        'seller',
-        subject,
-        htmlBody,
-        [ILLUSTRATION_ATTACHMENT],
-        (deal._id as Types.ObjectId).toString(),
-      );
+    // Send introduction emails to both advisor and buyer (same as pending to active)
+    try {
+      const seller = await this.sellerModel.findById(deal.seller).exec();
+      const buyer = await this.buyerModel.findById(buyerId).exec();
+      const companyProfile = await this.dealModel.db.model('CompanyProfile').findOne({ buyer: buyerId }).lean();
+
+      if (seller && buyer) {
+        // Email to Advisor (Seller)
+        const advisorSubject = `CIM AMPLIFY INTRODUCTION FOR ${deal.title}`;
+        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+          <p>${buyer.fullName} at ${buyer.companyName} is interested in learning more about ${deal.title}.  If you attached an NDA to this deal it has already been sent to the buyer for execution.</p>
+          <p>Here are the buyer's details:</p>
+          <p>
+            ${buyer.fullName}<br>
+            ${buyer.companyName}<br>
+            ${buyer.email}<br>
+            ${buyer.phone}<br>
+            ${(companyProfile as any)?.website || ''}
+          </p>
+        `);
+
+        await this.mailService.sendEmailWithLogging(
+          seller.email,
+          'seller',
+          advisorSubject,
+          advisorHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          (deal._id as Types.ObjectId).toString(),
+        );
+
+        // Email to Buyer with NDA if available
+        const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${deal.title}`;
+        const hasNda = deal.ndaDocument && deal.ndaDocument.base64Content;
+        const ndaFileName = hasNda && deal.ndaDocument ? deal.ndaDocument.originalName : '';
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+          <p>Thank you for accepting an introduction to <strong>${deal.title}</strong>. We've notified the Advisor who will reach out to you directly:</p>
+          <p style="margin: 16px 0; padding: 12px; background-color: #f5f5f5; border-radius: 8px;">
+            <strong>${seller.fullName}</strong><br>
+            ${seller.companyName}<br>
+            <a href="mailto:${seller.email}" style="color: #3aafa9;">${seller.email}</a>
+          </p>
+          ${hasNda
+            ? `
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin: 20px 0; border: 2px solid #3aafa9; border-radius: 8px; overflow: hidden;">
+                <tr>
+                  <td style="background-color: #3aafa9; padding: 12px 16px;">
+                    <strong style="color: #ffffff; font-size: 14px;">📎 NDA DOCUMENT ATTACHED</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color: #e8f5f3; padding: 16px;">
+                    <table cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="padding-right: 12px;">
+                          <div style="width: 40px; height: 40px; background-color: #3aafa9; border-radius: 4px; text-align: center; line-height: 40px;">
+                            <span style="color: white; font-size: 18px;">📄</span>
+                          </div>
+                        </td>
+                        <td>
+                          <strong style="color: #333; font-size: 14px;">${ndaFileName}</strong><br>
+                          <span style="color: #666; font-size: 12px;">Please download the attachment</span>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin: 12px 0 0 0; color: #333; font-size: 13px;">
+                      <strong>Next steps:</strong> Fill out and sign the NDA, then send it directly to the Advisor at
+                      <a href="mailto:${seller.email}" style="color: #3aafa9;">${seller.email}</a>
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            `
+            : ''
+          }
+          <p>To review this and other deals please go to your dashboard.</p>
+          ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
+          <p>If you don't hear back within 2 days, reply to this email and our team will assist.</p>
+        `);
+
+        // Build attachments array - include NDA if available
+        const buyerAttachments: any[] = [ILLUSTRATION_ATTACHMENT];
+        if (hasNda && deal.ndaDocument) {
+          const ndaBuffer = Buffer.from(deal.ndaDocument.base64Content, 'base64');
+          buyerAttachments.push({
+            filename: deal.ndaDocument.originalName,
+            content: ndaBuffer,
+            contentType: deal.ndaDocument.mimetype,
+          });
+        }
+
+        await this.mailService.sendEmailWithLogging(
+          buyer.email,
+          'buyer',
+          buyerSubject,
+          buyerHtmlBody,
+          buyerAttachments,
+          (deal._id as Types.ObjectId).toString(),
+        );
+      }
+    } catch (emailError) {
+      console.error('Failed to send marketplace introduction emails:', emailError);
+      // Don't fail the operation if emails fail
     }
 
-    return { message: 'Access request sent to seller' };
+    return { message: 'Deal added to your Active deals!' };
+  }
+
+  async markNotInterested(dealId: string, buyerId: string): Promise<{ message: string }> {
+    const deal = await this.dealModel.findById(dealId).exec() as DealDocument;
+    if (!deal) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+    if (!deal.isPublic) {
+      throw new ForbiddenException('This deal is not listed in the marketplace');
+    }
+
+    // Add buyer to hiddenByBuyers array - this just hides the deal from marketplace for this buyer
+    // It doesn't reject the deal, so if the deal matches their criteria later, they can still receive it
+    if (!deal.hiddenByBuyers) {
+      deal.hiddenByBuyers = [];
+    }
+    if (!deal.hiddenByBuyers.map(String).includes(buyerId)) {
+      deal.hiddenByBuyers.push(buyerId);
+    }
+
+    await deal.save();
+
+    return { message: 'Deal removed from your marketplace' };
   }
 
   async approveAccess(dealId: string, sellerId: string, buyerId: string): Promise<any> {
@@ -357,7 +488,8 @@ export class DealsService {
     if (buyer) {
       const subject = `You have access to the Marketplace deal`;
       const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-        <p>Your access request for the Marketplace deal was approved. The deal is now available in your <a href="${process.env.FRONTEND_URL}/buyer/login">Pending</a> tab. Click <strong>Move to Active</strong> to receive an introduction to the seller.</p>
+        <p>Your access request for the Marketplace deal was approved. The deal is now available in your Pending tab. Click <strong>Move to Active</strong> to receive an introduction to the advisor.</p>
+        ${emailButton('View Pending Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
       `);
       await this.mailService.sendEmailWithLogging(
         buyer.email,
@@ -415,8 +547,9 @@ export class DealsService {
     if (buyer) {
       const subject = `Access request declined for Marketplace deal`;
       const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-        <p>Your request to access the marketplace deal has been declined by the seller at this time.</p>
-        <p>You can continue browsing the <a href="${process.env.FRONTEND_URL}/buyer/login">marketplace</a> for other opportunities.</p>
+        <p>Your request to access the marketplace deal has been declined by the advisor at this time.</p>
+        <p>You can continue browsing the marketplace for other opportunities.</p>
+        ${emailButton('Browse Marketplace', `${process.env.FRONTEND_URL}/buyer/marketplace`)}
       `);
       await this.mailService.sendEmailWithLogging(
         buyer.email,
@@ -537,15 +670,16 @@ export class DealsService {
                 metadata: { source: 'marketplace-optout' },
               });
               await tracking.save();
-            } catch {}
+            } catch { }
             // Email buyer
             try {
               const buyer = await this.buyerModel.findById(buyerId).exec();
               if (buyer) {
                 const subject = `${deal.title} is no longer listed in the marketplace`;
                 const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-                  <p>Your request to access <strong>${deal.title}</strong> is no longer available because the seller removed the listing from the marketplace.</p>
-                  <p>You can continue browsing the <a href="${process.env.FRONTEND_URL}/buyer/login">marketplace</a> for other opportunities.</p>
+                  <p>Your request to access <strong>${deal.title}</strong> is no longer available because the advisor removed the listing from the marketplace.</p>
+                  <p>You can continue browsing the marketplace for other opportunities.</p>
+                  ${emailButton('Browse Marketplace', `${process.env.FRONTEND_URL}/buyer/marketplace`)}
                 `);
                 await this.mailService.sendEmailWithLogging(
                   buyer.email,
@@ -556,14 +690,33 @@ export class DealsService {
                   (deal._id as Types.ObjectId).toString(),
                 );
               }
-            } catch {}
+            } catch { }
           }
         }
       }
     }
+    // Handle NDA document update explicitly
+    if ('ndaDocument' in updateDealDto) {
+      if (updateDealDto.ndaDocument === null || updateDealDto.ndaDocument === undefined) {
+        // Remove NDA document if explicitly set to null/undefined
+        deal.ndaDocument = undefined;
+        deal.markModified('ndaDocument');
+      } else if (updateDealDto.ndaDocument) {
+        // Update NDA document with new data
+        deal.ndaDocument = {
+          originalName: updateDealDto.ndaDocument.originalName,
+          base64Content: updateDealDto.ndaDocument.base64Content,
+          mimetype: updateDealDto.ndaDocument.mimetype,
+          size: updateDealDto.ndaDocument.size,
+          uploadedAt: updateDealDto.ndaDocument.uploadedAt || new Date(),
+        };
+        deal.markModified('ndaDocument');
+      }
+    }
+
     // Only update provided fields, do not overwrite required fields with undefined
     for (const [key, value] of Object.entries(updateDataWithoutDocuments)) {
-      if (typeof value !== "undefined") {
+      if (typeof value !== "undefined" && key !== 'ndaDocument') {
         (deal as any)[key] = value;
       }
     }
@@ -976,7 +1129,7 @@ export class DealsService {
 
 
 
-  // -------------------------------------------------------------------------------------------------------------------------
+  // ----------------------------------------------------------------------------------------------------------------
 
 
 
@@ -995,9 +1148,6 @@ export class DealsService {
     const alreadyInvitedBuyerIds = deal.invitationStatus instanceof Map
       ? Array.from(deal.invitationStatus.keys())
       : Object.keys(deal.invitationStatus || {});
-    console.log('DEBUG: alreadyInvitedBuyerIds:', alreadyInvitedBuyerIds);
-    const companyProfiles = await companyProfileModel.find({}).lean();
-    console.log('DEBUG: CompanyProfile buyers:', companyProfiles.map(cp => cp.buyer));
     const mandatoryQuery: any = {
       "preferences.stopSendingDeals": { $ne: true },
       "targetCriteria.countries": { $in: expandedGeos },
@@ -1282,40 +1432,65 @@ export class DealsService {
   }
   async targetDealToBuyers(dealId: string, buyerIds: string[]): Promise<DealDocument> {
     const deal = (await this.dealModel.findById(dealId).exec()) as DealDocument;
-  
+
     if (!deal) {
       throw new Error(`Deal with ID ${dealId} not found`);
     }
-  
+
     const existingTargets = deal.targetedBuyers.map((id) => id.toString());
     const newTargets = buyerIds.filter((id) => !existingTargets.includes(id));
-  
+
     if (newTargets.length > 0) {
       deal.targetedBuyers = [...deal.targetedBuyers, ...newTargets];
-  
+
       for (const buyerId of newTargets) {
         deal.invitationStatus.set(buyerId, {
           invitedAt: new Date(),
           response: "pending",
         });
-  
+
         // Send email to invited buyer
         const buyer = await this.buyerModel.findById(buyerId).exec();
         if (buyer) {
           const dealIdStr =
             deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
-  
-          const subject = "YOU HAVE A NEW DEAL MATCH ON CIM AMPLIFY";
+
           const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingRevenueAmount || 0);
           const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
+          const subject = `YOU ARE INVITED TO PARTICIPATE IN A ${trailingEBITDAAmount} DEAL`;
+
+          // Build action URLs for email buttons
+          const activateUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=activate&dealId=${dealIdStr}`;
+          const passUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=pass&dealId=${dealIdStr}`;
+
           const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
             <p><b>Details:</b> ${deal.companyDescription}</p>
             <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
             <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
-            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify (<a href="${process.env.FRONTEND_URL}/buyer/login">dashboard</a>) under Pending and click <strong>Move to Active</strong> button to see more details.</p>
-            <p>Finally, please keep your dashboard up to date by moving Pending deals to either <b>Pass</b> or <b>Move to Active<b/>.</p>
+
+            <!-- Action Buttons -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 24px 0;">
+              <tr>
+                <td align="center">
+                  <table border="0" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td align="center" style="padding-right: 12px;">
+                        <a href="${activateUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #3AAFA9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Move to Active / Request Info</a>
+                      </td>
+                      <td align="center" style="padding-left: 12px;">
+                        <a href="${passUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #E35153; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Pass</a>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard under Pending to see more details.</p>
+            <p>Please keep your dashboard up to date by responding to Pending deals promptly.</p>
+            ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
           `);
-  
+
           await this.mailService.sendEmailWithLogging(
             buyer.email,
             'buyer',
@@ -1326,14 +1501,14 @@ export class DealsService {
           );
         }
       }
-  
+
       deal.timeline.updatedAt = new Date();
       await deal.save();
     }
-  
+
     return deal;
   }
-  
+
 
   async updateDealStatus(dealId: string, buyerId: string, status: "pending" | "active" | "rejected"): Promise<any> {
     try {
@@ -1354,6 +1529,13 @@ export class DealsService {
           interactionType = "interest"
           if (!deal.interestedBuyers.includes(buyerId)) {
             deal.interestedBuyers.push(buyerId)
+          }
+          // Track that this buyer has ever had the deal in Active
+          if (!deal.everActiveBuyers) {
+            deal.everActiveBuyers = []
+          }
+          if (!deal.everActiveBuyers.map(String).includes(buyerId)) {
+            deal.everActiveBuyers.push(buyerId)
           }
           break
         case "rejected":
@@ -1412,6 +1594,13 @@ export class DealsService {
         if (!dealDoc.interestedBuyers.includes(buyerId)) {
           dealDoc.interestedBuyers.push(buyerId)
         }
+        // Track that this buyer has ever had the deal in Active
+        if (!dealDoc.everActiveBuyers) {
+          dealDoc.everActiveBuyers = []
+        }
+        if (!dealDoc.everActiveBuyers.map(String).includes(buyerId)) {
+          dealDoc.everActiveBuyers.push(buyerId)
+        }
       } else if (status === "rejected") {
         dealDoc.interestedBuyers = dealDoc.interestedBuyers.filter((id) => id.toString() !== buyerId)
       }
@@ -1445,48 +1634,135 @@ export class DealsService {
       await dealDoc.save() // Now calling save() on the document
 
       // Send email notifications based on status
+      console.log('[Introduction Email] Status is:', status);
       if (status === "active") {
+        console.log('[Introduction Email] Entering active status block');
         // Buyer accepts deal: Send introduction email to seller and buyer
         const seller = await this.sellerModel.findById(dealDoc.seller).exec();
         const buyer = await this.buyerModel.findById(buyerId).exec();
         const companyProfile = await this.dealModel.db.model('CompanyProfile').findOne({ buyer: buyerId }).lean();
 
+        // Debug logging for NDA
+        console.log('[Introduction Email] Deal:', dealDoc.title);
+        console.log('[Introduction Email] Seller found:', !!seller);
+        console.log('[Introduction Email] Buyer found:', !!buyer);
+        console.log('[Introduction Email] Has NDA Document:', !!dealDoc.ndaDocument);
+        if (dealDoc.ndaDocument) {
+          console.log('[Introduction Email] NDA Original Name:', dealDoc.ndaDocument.originalName);
+          console.log('[Introduction Email] NDA Has Base64:', !!dealDoc.ndaDocument.base64Content);
+        }
+
+        // Email to Advisor (Seller)
         if (seller && buyer) {
-          const sellerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
-          const sellerHtmlBody = genericEmailTemplate(sellerSubject, seller.fullName.split(' ')[0], `
-            <p>${buyer.fullName} at ${buyer.companyName} is interested in learning more about ${dealDoc.title}. Please send your NDA to ${buyer.email}.</p>
+          console.log('[Introduction Email] Both advisor and buyer found, preparing emails');
+          const advisorSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
+          const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+            <p>${buyer.fullName} at ${buyer.companyName} is interested in learning more about ${dealDoc.title}.  If you attached an NDA to this deal it has already been sent to the buyer for execution.</p>
             <p>Here are the buyer's details:</p>
             <p>
               ${buyer.fullName}<br>
               ${buyer.companyName}<br>
+              ${buyer.email}<br>
               ${buyer.phone}<br>
               ${(companyProfile as any)?.website || ''}
             </p>
             <p>Thank you!</p>
           `);
-          await this.mailService.sendEmailWithLogging(
-            seller.email,
-            'seller',
-            sellerSubject,
-            sellerHtmlBody,
-            [ILLUSTRATION_ATTACHMENT], // attachments
-            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
-          );
+
+          try {
+            console.log('[Introduction Email] Sending email to advisor:', seller.email);
+            await this.mailService.sendEmailWithLogging(
+              seller.email,
+              'seller',
+              advisorSubject,
+              advisorHtmlBody,
+              [ILLUSTRATION_ATTACHMENT], // attachments
+              (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
+            );
+            console.log('[Introduction Email] Email sent successfully to advisor');
+          } catch (advisorEmailError) {
+            console.error('[Introduction Email] Failed to send email to advisor:', advisorEmailError);
+          }
 
           const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
+          const hasNda = dealDoc.ndaDocument && dealDoc.ndaDocument.base64Content;
+          const ndaFileName = hasNda && dealDoc.ndaDocument ? dealDoc.ndaDocument.originalName : '';
           const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
-            <p>Thank you for accepting an introduction to <strong>${dealDoc.title}</strong>. We've notified the seller and will keep you updated inside CIM Amplify.</p>
-            <p>You can review next steps from your <a href="${process.env.FRONTEND_URL}/buyer/login">buyer dashboard</a>. We'll alert you as soon as the seller responds.</p>
-            <p>If you don't hear back within 2 business days, reply to this email and our team will assist.</p>
+            <p>Thank you for accepting an introduction to <strong>${dealDoc.title}</strong>. We've notified the Advisor who will reach out to you directly:</p>
+            <p style="margin: 16px 0; padding: 12px; background-color: #f5f5f5; border-radius: 8px;">
+              <strong>${seller.fullName}</strong><br>
+              ${seller.companyName}<br>
+              <a href="mailto:${seller.email}" style="color: #3aafa9;">${seller.email}</a>
+            </p>
+            ${hasNda
+              ? `
+                <table width="100%" cellpadding="0" cellspacing="0" style="margin: 20px 0; border: 2px solid #3aafa9; border-radius: 8px; overflow: hidden;">
+                  <tr>
+                    <td style="background-color: #3aafa9; padding: 12px 16px;">
+                      <strong style="color: #ffffff; font-size: 14px;">📎 NDA DOCUMENT ATTACHED</strong>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="background-color: #e8f5f3; padding: 16px;">
+                      <table cellpadding="0" cellspacing="0">
+                        <tr>
+                          <td style="padding-right: 12px;">
+                            <div style="width: 40px; height: 40px; background-color: #3aafa9; border-radius: 4px; text-align: center; line-height: 40px;">
+                              <span style="color: white; font-size: 18px;">📄</span>
+                            </div>
+                          </td>
+                          <td>
+                            <strong style="color: #333; font-size: 14px;">${ndaFileName}</strong><br>
+                            <span style="color: #666; font-size: 12px;">Please download the attachment</span>
+                          </td>
+                        </tr>
+                      </table>
+                      <p style="margin: 12px 0 0 0; color: #333; font-size: 13px;">
+                        <strong>Next steps:</strong> Fill out and sign the NDA, then send it directly to the Advisor at
+                        <a href="mailto:${seller.email}" style="color: #3aafa9;">${seller.email}</a>
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              `
+              : ''
+            }
+            <p>To review this and other deals please go to your dashboard.</p>
+            ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
+            <p>If you don't hear back within 2 days, reply to this email and our team will assist.</p>
           `);
-          await this.mailService.sendEmailWithLogging(
-            buyer.email,
-            'buyer',
-            buyerSubject,
-            buyerHtmlBody,
-            [ILLUSTRATION_ATTACHMENT],
-            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
-          );
+
+          // Build attachments array - include NDA if available
+          const buyerAttachments: any[] = [ILLUSTRATION_ATTACHMENT];
+          if (hasNda && dealDoc.ndaDocument) {
+            console.log('[Introduction Email] Adding NDA attachment:', dealDoc.ndaDocument.originalName);
+            console.log('[Introduction Email] NDA base64 length:', dealDoc.ndaDocument.base64Content?.length || 0);
+
+            // Convert base64 string to Buffer for nodemailer
+            const ndaBuffer = Buffer.from(dealDoc.ndaDocument.base64Content, 'base64');
+            console.log('[Introduction Email] NDA buffer size:', ndaBuffer.length);
+
+            buyerAttachments.push({
+              filename: dealDoc.ndaDocument.originalName,
+              content: ndaBuffer,
+              contentType: dealDoc.ndaDocument.mimetype,
+            });
+          }
+
+          try {
+            console.log('[Introduction Email] Sending email to buyer:', buyer.email);
+            await this.mailService.sendEmailWithLogging(
+              buyer.email,
+              'buyer',
+              buyerSubject,
+              buyerHtmlBody,
+              buyerAttachments,
+              (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
+            );
+            console.log('[Introduction Email] Email sent successfully to buyer');
+          } catch (emailError) {
+            console.error('[Introduction Email] Failed to send email to buyer:', emailError);
+          }
         }
       } else if (status === "rejected") {
         // Buyer rejects deal: Notify seller
@@ -1496,7 +1772,8 @@ export class DealsService {
         if (seller && buyer) {
           const subject = `${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}`;
           const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
-            <p>${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}. You can view all of your buyer activity on your <a href="${process.env.FRONTEND_URL}/seller/login">dashboard</a>.</p>
+            <p>${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}. You can view all of your buyer activity on your dashboard.</p>
+            ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/seller/dashboard`)}
           `);
           await this.mailService.sendEmailWithLogging(
             seller.email,
@@ -1521,7 +1798,7 @@ export class DealsService {
       sort: { "timeline.updatedAt": -1 },
       populate: { path: 'seller', select: 'fullName companyName' },
     };
-  
+
     if (status === "active") {
       return this.dealModel.find({
         [`invitationStatus.${buyerId}.response`]: "accepted",
@@ -1744,6 +2021,60 @@ export class DealsService {
     }
   }
 
+  // Get buyers who have ever had this deal in their Active tab (for "Buyer from CIM Amplify" dropdown)
+  async getEverActiveBuyers(dealId: string): Promise<any[]> {
+    try {
+      const deal = await this.dealModel.findById(dealId).exec();
+      if (!deal) {
+        throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+      }
+
+      const everActiveBuyerIds = deal.everActiveBuyers || [];
+      if (everActiveBuyerIds.length === 0) {
+        return [];
+      }
+
+      // Populate buyer details with company profile info
+      const buyers = await this.buyerModel.find({
+        _id: { $in: everActiveBuyerIds }
+      }).lean();
+
+      const companyProfileModel = this.dealModel.db.model('CompanyProfile');
+      const companyProfiles = await companyProfileModel.find({
+        buyer: { $in: everActiveBuyerIds }
+      }).lean();
+
+      // Create a map for quick lookup
+      const profileMap = new Map();
+      companyProfiles.forEach((profile: any) => {
+        profileMap.set(profile.buyer.toString(), profile);
+      });
+
+      // Get current status from invitationStatus
+      const result = buyers.map((buyer: any) => {
+        const profile = profileMap.get(buyer._id.toString());
+        const invitationInfo = deal.invitationStatus?.get(buyer._id.toString());
+
+        return {
+          _id: buyer._id,
+          fullName: buyer.fullName,
+          email: buyer.email,
+          companyName: buyer.companyName || profile?.companyName,
+          companyType: profile?.companyType,
+          currentStatus: invitationInfo?.response || 'unknown',
+          // Indicate if buyer is currently in Active (accepted) or has passed (rejected)
+          wasEverActive: true,
+          isCurrentlyActive: invitationInfo?.response === 'accepted',
+        };
+      });
+
+      return result;
+    } catch (error) {
+      console.error('Error in getEverActiveBuyers:', error);
+      throw new InternalServerErrorException(`Failed to get ever active buyers: ${error.message}`);
+    }
+  }
+
 
   async getDocumentFile(dealId: string, filename: string): Promise<{ stream: fs.ReadStream; mimetype: string; originalName: string }> {
     const deal = await this.findOne(dealId);
@@ -1806,10 +2137,9 @@ export class DealsService {
           companyProfileModel.findOne({ buyer: buyerId }).lean(),
         ]);
         if (!buyer) {
-          console.warn(`Buyer with ID ${buyerId} not found`);
           continue;
         }
-        
+
         let resolvedCompanyName = '';
         if (companyProfile) {
           if (Array.isArray(companyProfile)) {
@@ -1819,17 +2149,17 @@ export class DealsService {
           }
         }
         const companyName = resolvedCompanyName || buyer.companyName || '';
-        
+
         const buyerData: BuyerStatus = {
           buyerId,
           buyerName: buyer.fullName || 'Unknown',
           buyerEmail: buyer.email || '',
           buyerCompany: companyName,
         };
-        
+
         buyerMap.set(buyerId, buyerData);
         buyerIds.add(buyerId);
-        
+
         // Only use invitationStatus for categorization to avoid double counting
         switch (response) {
           case 'accepted':
@@ -1849,10 +2179,9 @@ export class DealsService {
       const buyerInteractions = await this.getBuyerInteractionsForDeal(dealId);
       for (const interaction of buyerInteractions) {
         if (!mongoose.isValidObjectId(interaction.buyerId)) {
-          console.warn(`Invalid buyerId in interactions: ${interaction.buyerId}`);
           continue;
         }
-        
+
         // Only update existing buyers with interaction details
         if (buyerIds.has(interaction.buyerId)) {
           const existing = buyerMap.get(interaction.buyerId)!;
@@ -1898,6 +2227,9 @@ export class DealsService {
       throw new ForbiddenException("You don't have permission to close this deal");
     }
 
+    // Track if this was an LOI deal before closing
+    const wasLOIDeal = dealDoc.status === DealStatus.LOI;
+
     dealDoc.status = DealStatus.COMPLETED;
 
     // Ensure timeline object exists
@@ -1915,6 +2247,10 @@ export class DealsService {
       dealDoc.financialDetails.finalSalePrice = finalSalePrice;
       dealDoc.markModified('financialDetails');
     }
+
+    // Store if this was an LOI deal
+    (dealDoc as any).wasLOIDeal = wasLOIDeal;
+    dealDoc.markModified('wasLOIDeal');
 
     // Ensure rewardLevel is set (required)
     if (!dealDoc.rewardLevel) {
@@ -1948,6 +2284,9 @@ export class DealsService {
         dealDoc.closedWithBuyer = winningBuyerId;
         dealDoc.closedWithBuyerCompany = buyer.companyName || '';
         dealDoc.closedWithBuyerEmail = buyer.email || '';
+        dealDoc.markModified('closedWithBuyer');
+        dealDoc.markModified('closedWithBuyerCompany');
+        dealDoc.markModified('closedWithBuyerEmail');
       }
     }
 
@@ -1962,17 +2301,17 @@ export class DealsService {
 
       if (seller && winningBuyer) {
         const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
-        // Email to Seller
-        const sellerSubject = `Thank you for using CIM Amplify!`;
-        const sellerHtmlBody = genericEmailTemplate(sellerSubject, seller.fullName.split(' ')[0], `
+        // Email to Advisor (Seller)
+        const advisorSubject = `Thank you for using CIM Amplify!`;
+        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
           <p>Thank you so much for posting your deal on CIM Amplify! We will be in touch to send you your reward once we have contacted the buyer. This process should not take long but feel free to contact us anytime for an update.</p>
           <p>We hope that you will post with us again soon!</p>
         `);
         await this.mailService.sendEmailWithLogging(
           seller.email,
           'seller',
-          sellerSubject,
-          sellerHtmlBody,
+          advisorSubject,
+          advisorHtmlBody,
           [ILLUSTRATION_ATTACHMENT], // attachments
           dealIdStr, // relatedDealId
         );
@@ -1989,7 +2328,7 @@ export class DealsService {
         //   buyerSubject,
         //   buyerHtmlBody,
         //   [ILLUSTRATION_ATTACHMENT], // attachments
-        //   dealIdStr,
+        // canotifications@amp-ven.com
         // );
 
         // Send email to project owner
@@ -2030,8 +2369,78 @@ export class DealsService {
           [ILLUSTRATION_ATTACHMENT], // attachments
           dealIdStr,
         );
-        
+
       }
+    }
+
+    // Notify active and pending buyers that the deal is now off-market
+    // This gives them FOMO and keeps them engaged for future deals
+    try {
+      const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
+      const seller = await this.sellerModel.findById(dealDoc.seller).exec();
+
+      // Get all buyers with active or pending status for this deal
+      const invitationStatus = dealDoc.invitationStatus;
+      if (invitationStatus && invitationStatus.size > 0) {
+        const buyerIdsToNotify: string[] = [];
+
+        invitationStatus.forEach((status, buyerId) => {
+          // Notify both active (accepted) and pending buyers
+          if (status.response === 'accepted' || status.response === 'pending') {
+            // Skip the winning buyer if there is one
+            if (!winningBuyerId || buyerId !== winningBuyerId) {
+              buyerIdsToNotify.push(buyerId);
+            }
+          }
+        });
+
+        if (buyerIdsToNotify.length > 0) {
+          const buyers = await this.buyerModel.find({ _id: { $in: buyerIdsToNotify } }).exec();
+
+          for (const buyer of buyers) {
+            const buyerStatus = invitationStatus.get(buyer._id.toString());
+            const wasActive = buyerStatus?.response === 'accepted';
+            const wasPending = buyerStatus?.response === 'pending';
+
+            const subject = `Deal Update: ${dealDoc.title} is now off market`;
+            
+            let emailContent = '';
+            if (wasActive) {
+              // Email for Active Buyers
+              emailContent = `
+                <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.Thank you for reviewing this deal!</p>
+                <p>We will send you an email when you are invited to participate in new deals and there are lots of in Marketplace for you to review.</p>
+                <p>If you have deals sitting in Pending please respond ASAP as advisors are waiting for your response.</p>
+                ${emailButton('View Available Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
+                <p>Stay tuned for more opportunities!</p>
+              `;
+            } else if (wasPending) {
+              // Email for Pending Buyers
+              emailContent = `
+                <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.</p>
+                <p>This deal was in your Pending Deals. Please make sure to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
+                <p>Check out other available deals on your dashboard. Also, check out Marketplace on your dashboard for deals that Advisors have posted to all CIM Amplify Members.</p>
+                ${emailButton('View Available Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
+                <p>Stay tuned for more opportunities!</p>
+              `;
+            }
+
+            const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
+
+            await this.mailService.sendEmailWithLogging(
+              buyer.email,
+              'buyer',
+              subject,
+              htmlBody,
+              [ILLUSTRATION_ATTACHMENT],
+              dealIdStr,
+            );
+          }
+        }
+      }
+    } catch (error) {
+      // Log but don't fail the operation if notification emails fail
+      console.error('Error sending off-market notifications to buyers:', error);
     }
 
     return savedDeal;
@@ -2411,10 +2820,11 @@ export class DealsService {
   }
 
   // Add a method for seller's true active deals (at least one invitationStatus.response === 'accepted')
+  // Excludes both 'completed' (off-market) and 'loi' deals
   async getSellerActiveDeals(sellerId: string): Promise<Deal[]> {
     return this.dealModel.find({
       seller: sellerId,
-      status: { $ne: DealStatus.COMPLETED },
+      status: { $nin: [DealStatus.COMPLETED, DealStatus.LOI] },
       $expr: {
         $gt: [
           {
@@ -2430,5 +2840,640 @@ export class DealsService {
         ],
       },
     }).sort({ "timeline.updatedAt": -1 }).exec();
+  }
+
+  /**
+   * Optimized admin deals fetch - Single aggregation query that:
+   * 1. Filters deals by status/search
+   * 2. Joins seller profiles
+   * 3. Calculates buyer status summaries
+   * 4. Returns paginated results with total count
+   */
+  async findAllAdminOptimized(
+    filters: {
+      search?: string;
+      buyerResponse?: string;
+      status?: string;
+      isPublic?: string;
+      excludeStatus?: string;
+    } = {},
+    page: number = 1,
+    limit: number = 10
+  ): Promise<{
+    data: any[];
+    total: number;
+    page: number;
+    lastPage: number;
+    stats: {
+      totalDeals: number;
+      activeDeals: number;
+      completedDeals: number;
+      totalBuyers: number;
+      totalSellers: number;
+    };
+  }> {
+    const skip = (page - 1) * limit;
+
+    // Build match stage
+    const matchStage: any = {};
+
+    if (filters.search) {
+      const searchRegex = new RegExp(filters.search, 'i');
+      matchStage.$or = [
+        { title: searchRegex },
+        { companyDescription: searchRegex },
+        { industrySector: searchRegex },
+      ];
+    }
+
+    // Status filtering logic
+    if (filters.buyerResponse === 'accepted') {
+      matchStage.$expr = {
+        $gt: [
+          {
+            $size: {
+              $filter: {
+                input: { $objectToArray: '$invitationStatus' },
+                as: 'item',
+                cond: { $eq: ['$$item.v.response', 'accepted'] },
+              },
+            },
+          },
+          0,
+        ],
+      };
+      matchStage.status = { $nin: ['completed', 'loi'] };
+    } else if (filters.status) {
+      if (filters.status === 'active') {
+        matchStage.status = { $nin: ['completed', 'loi'] };
+      } else {
+        matchStage.status = filters.status;
+      }
+    } else if (filters.excludeStatus) {
+      // This is used for "All Deals" view which shows Active + LOI deals (excludes only completed/off-market)
+      matchStage.status = { $ne: filters.excludeStatus };
+    }
+
+    if (filters.isPublic !== undefined) {
+      matchStage.isPublic = filters.isPublic === 'true';
+    }
+
+    // Single aggregation pipeline
+    const pipeline: any[] = [
+      { $match: matchStage },
+      // Sort by most recent first
+      { $sort: { 'timeline.updatedAt': -1, createdAt: -1 } },
+      // Facet for parallel execution of data + count + stats
+      {
+        $facet: {
+          // Get paginated deals with seller lookup
+          data: [
+            { $skip: skip },
+            { $limit: limit },
+            // Lookup seller profile
+            {
+              $lookup: {
+                from: 'sellers',
+                let: { sellerId: { $toObjectId: '$seller' } },
+                pipeline: [
+                  { $match: { $expr: { $eq: ['$_id', '$$sellerId'] } } },
+                  {
+                    $project: {
+                      _id: 1,
+                      fullName: 1,
+                      email: 1,
+                      companyName: 1,
+                      phoneNumber: 1,
+                      website: 1,
+                      profilePicture: 1,
+                    },
+                  },
+                ],
+                as: 'sellerProfile',
+              },
+            },
+            { $unwind: { path: '$sellerProfile', preserveNullAndEmptyArrays: true } },
+            // Calculate buyer status summary from invitationStatus
+            {
+              $addFields: {
+                invitationStatusArray: { $objectToArray: { $ifNull: ['$invitationStatus', {}] } },
+              },
+            },
+            {
+              $addFields: {
+                statusSummary: {
+                  totalTargeted: { $size: { $ifNull: ['$targetedBuyers', []] } },
+                  totalActive: {
+                    $size: {
+                      $filter: {
+                        input: '$invitationStatusArray',
+                        as: 'inv',
+                        cond: { $eq: ['$$inv.v.response', 'accepted'] },
+                      },
+                    },
+                  },
+                  totalPending: {
+                    $size: {
+                      $filter: {
+                        input: '$invitationStatusArray',
+                        as: 'inv',
+                        cond: {
+                          $or: [
+                            { $eq: ['$$inv.v.response', 'pending'] },
+                            { $eq: ['$$inv.v.response', 'requested'] },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                  totalRejected: {
+                    $size: {
+                      $filter: {
+                        input: '$invitationStatusArray',
+                        as: 'inv',
+                        cond: { $eq: ['$$inv.v.response', 'rejected'] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            // Clean up temporary fields
+            { $project: { invitationStatusArray: 0 } },
+          ],
+          // Get total count
+          totalCount: [{ $count: 'count' }],
+        },
+      },
+    ];
+
+    const [result] = await this.dealModel.aggregate(pipeline).exec();
+
+    const data = result?.data || [];
+    const total = result?.totalCount?.[0]?.count || 0;
+
+    // Get global stats in parallel (cached for performance)
+    const [totalDeals, activeDeals, completedDeals, totalBuyers, totalSellers] = await Promise.all([
+      this.dealModel.countDocuments({}).exec(),
+      this.dealModel.countDocuments({ status: { $ne: 'completed' } }).exec(),
+      this.dealModel.countDocuments({ status: 'completed' }).exec(),
+      this.buyerModel.countDocuments({}).exec(),
+      this.sellerModel.countDocuments({}).exec(),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      lastPage: Math.ceil(total / limit),
+      stats: {
+        totalDeals,
+        activeDeals,
+        completedDeals,
+        totalBuyers,
+        totalSellers,
+      },
+    };
+  }
+
+  /**
+   * Get admin dashboard statistics
+   */
+  async getAdminDashboardStats(): Promise<{
+    totalDeals: number;
+    activeDeals: number;
+    completedDeals: number;
+    loiDeals: number;
+    totalBuyers: number;
+    totalSellers: number;
+    dealsThisMonth: number;
+    dealsLastMonth: number;
+  }> {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+
+    const [
+      totalDeals,
+      activeDeals,
+      completedDeals,
+      loiDeals,
+      totalBuyers,
+      totalSellers,
+      dealsThisMonth,
+      dealsLastMonth,
+    ] = await Promise.all([
+      this.dealModel.countDocuments({}).exec(),
+      this.dealModel.countDocuments({ status: { $nin: ['completed', 'loi'] } }).exec(),
+      this.dealModel.countDocuments({ status: 'completed' }).exec(),
+      this.dealModel.countDocuments({ status: 'loi' }).exec(),
+      this.buyerModel.countDocuments({}).exec(),
+      this.sellerModel.countDocuments({}).exec(),
+      this.dealModel.countDocuments({ createdAt: { $gte: startOfMonth } }).exec(),
+      this.dealModel.countDocuments({
+        createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
+      }).exec(),
+    ]);
+
+    return {
+      totalDeals,
+      activeDeals,
+      completedDeals,
+      loiDeals,
+      totalBuyers,
+      totalSellers,
+      dealsThisMonth,
+      dealsLastMonth,
+    };
+  }
+
+  /**
+   * Move a deal to LOI (Letter of Intent) status - pauses the deal for LOI negotiations
+   */
+  async moveDealToLOI(
+    dealId: string,
+    userId: string,
+    userRole?: string,
+  ): Promise<Deal> {
+    const dealDoc = await this.dealModel.findById(dealId).exec();
+    if (!dealDoc) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+
+    // Only check seller for sellers; allow admin
+    if (userRole !== 'admin' && dealDoc.seller.toString() !== userId) {
+      throw new ForbiddenException("You don't have permission to modify this deal");
+    }
+
+    // Can only move active deals to LOI
+    if (dealDoc.status !== DealStatus.ACTIVE && dealDoc.status !== DealStatus.DRAFT) {
+      throw new BadRequestException(`Deal must be active or draft to be paused for LOI. Current status: ${dealDoc.status}`);
+    }
+
+    dealDoc.status = DealStatus.LOI;
+
+    // Ensure timeline object exists
+    if (!dealDoc.timeline || typeof dealDoc.timeline !== 'object') {
+      dealDoc.timeline = {} as any;
+    }
+    dealDoc.timeline.updatedAt = new Date();
+    dealDoc.markModified('timeline');
+
+    // Ensure rewardLevel is set (required)
+    if (!dealDoc.rewardLevel) {
+      const rewardLevelMap: Record<string, 'Seed' | 'Bloom' | 'Fruit'> = {
+        seed: 'Seed',
+        bloom: 'Bloom',
+        fruit: 'Fruit',
+      };
+      dealDoc.rewardLevel = rewardLevelMap[(dealDoc.visibility || '').toLowerCase()] || 'Seed';
+    }
+
+    const savedDeal = await dealDoc.save();
+
+    // Send LOI pause email notifications
+    try {
+      const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
+      const seller = await this.sellerModel.findById(dealDoc.seller).exec();
+
+      // Get active and pending buyers (those with 'accepted' or 'pending' invitation status)
+      const activeBuyerIds: string[] = [];
+      const pendingBuyerIds: string[] = [];
+      if (dealDoc.invitationStatus) {
+        const invitationStatusObj = dealDoc.invitationStatus instanceof Map
+          ? Object.fromEntries(dealDoc.invitationStatus)
+          : dealDoc.invitationStatus;
+
+        for (const [buyerId, status] of Object.entries(invitationStatusObj)) {
+          if (status && typeof status === 'object') {
+            if ((status as any).response === 'accepted') {
+              activeBuyerIds.push(buyerId);
+            } else if ((status as any).response === 'pending') {
+              pendingBuyerIds.push(buyerId);
+            }
+          }
+        }
+      }
+
+      // Fetch active buyers info
+      const activeBuyers: { fullName: string; companyName: string; email: string }[] = [];
+      for (const buyerId of activeBuyerIds) {
+        const buyer = await this.buyerModel.findById(buyerId).exec();
+        if (buyer) {
+          activeBuyers.push({
+            fullName: buyer.fullName,
+            companyName: buyer.companyName,
+            email: buyer.email,
+          });
+        }
+      }
+
+      // Fetch pending buyers info
+      const pendingBuyers: { fullName: string; companyName: string; email: string }[] = [];
+      for (const buyerId of pendingBuyerIds) {
+        const buyer = await this.buyerModel.findById(buyerId).exec();
+        if (buyer) {
+          pendingBuyers.push({
+            fullName: buyer.fullName,
+            companyName: buyer.companyName,
+            email: buyer.email,
+          });
+        }
+      }
+
+      // Build active buyers list HTML for project owner
+      const activeBuyersHtml = activeBuyers.length > 0
+        ? `<p><strong>Active Buyers (${activeBuyers.length}):</strong></p>
+           <ul style="margin: 8px 0; padding-left: 20px;">
+             ${activeBuyers.map(b => `<li style="margin-bottom: 4px;"><strong>${b.fullName}</strong> - ${b.companyName} (${b.email})</li>`).join('')}
+           </ul>`
+        : `<p><strong>Active Buyers:</strong> None</p>`;
+
+      // Build pending buyers list HTML for project owner
+      const pendingBuyersHtml = pendingBuyers.length > 0
+        ? `<p><strong>Pending Buyers (${pendingBuyers.length}):</strong></p>
+           <ul style="margin: 8px 0; padding-left: 20px;">
+             ${pendingBuyers.map(b => `<li style="margin-bottom: 4px;"><strong>${b.fullName}</strong> - ${b.companyName} (${b.email})</li>`).join('')}
+           </ul>`
+        : `<p><strong>Pending Buyers:</strong> None</p>`;
+
+      // Email to Project Owner
+      const ownerSubject = `Deal Paused for LOI: ${dealDoc.title}`;
+      const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
+        <p>A deal has been paused for Letter of Intent (LOI) negotiations.</p>
+        <p><strong>Deal:</strong> ${dealDoc.title}</p>
+        <p><strong>Seller:</strong> ${seller?.fullName || 'Unknown'} (${seller?.companyName || 'N/A'})</p>
+        <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
+        ${activeBuyersHtml}
+        ${pendingBuyersHtml}
+      `);
+      await this.mailService.sendEmailWithLogging(
+        'canotifications@amp-ven.com',
+        'admin',
+        ownerSubject,
+        ownerHtmlBody,
+        [ILLUSTRATION_ATTACHMENT],
+        dealIdStr,
+      );
+
+      // Email to Advisor (Seller)
+      if (seller) {
+        const advisorSubject = `Your Deal Has Been Paused for LOI`;
+        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+          <p>Your deal <strong>${dealDoc.title}</strong> has been paused for Letter of Intent (LOI) negotiations.</p>
+          <p>While your deal is paused, it will not be visible to new buyers on the marketplace. Existing active buyers have been notified about this status change.</p>
+          <p>When you are ready to make the deal active again, you can revive it from your LOI Deals dashboard. If the deal does sell please click Off Market and let us know the details of the sale.</p>
+          ${emailButton('View LOI Deals', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/seller/loi-deals`)}
+        `);
+        await this.mailService.sendEmailWithLogging(
+          seller.email,
+          'seller',
+          advisorSubject,
+          advisorHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      }
+
+      // Email to Active Buyers (reuse already fetched buyer data)
+      for (const buyer of activeBuyers) {
+        const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+          <p>The deal <strong>${dealDoc.title}</strong> has been paused by the advisor for Letter of Intent (LOI) negotiations.</p>
+          <p>This means the advisor is currently in advanced discussions with a potential buyer. The deal will remain in your Active deals, and you will be notified if it becomes available again.</p>
+          <p>In the meantime, feel free to explore other opportunities on CIM Amplify.</p>
+          ${emailButton('Browse Marketplace', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/buyer/marketplace`)}
+        `);
+        await this.mailService.sendEmailWithLogging(
+          buyer.email,
+          'buyer',
+          buyerSubject,
+          buyerHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      }
+
+      // Email to Pending Buyers - give them FOMO to encourage faster response next time
+      for (const buyer of pendingBuyers) {
+        const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+          <p>One of your Pending Deals has gone under LOI before you had a chance to respond. This deal will remain in your Pending Deals until it either becomes active again or is taken off market.</p>
+          <p>Please remember that you need to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
+          ${emailButton('See Pending Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
+        `);
+        await this.mailService.sendEmailWithLogging(
+          buyer.email,
+          'buyer',
+          buyerSubject,
+          buyerHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      }
+    } catch (emailError) {
+      // Log email error but don't fail the LOI operation
+      console.error('Failed to send LOI pause email notifications:', emailError);
+    }
+
+    return savedDeal;
+  }
+
+  /**
+   * Revive a deal from LOI status back to Active
+   */
+  async reviveDealFromLOI(
+    dealId: string,
+    userId: string,
+    userRole?: string,
+  ): Promise<Deal> {
+    const dealDoc = await this.dealModel.findById(dealId).exec();
+    if (!dealDoc) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+
+    // Only check seller for sellers; allow admin
+    if (userRole !== 'admin' && dealDoc.seller.toString() !== userId) {
+      throw new ForbiddenException("You don't have permission to modify this deal");
+    }
+
+    // Can only revive LOI deals
+    if (dealDoc.status !== DealStatus.LOI) {
+      throw new BadRequestException(`Deal must be in LOI status to be revived. Current status: ${dealDoc.status}`);
+    }
+
+    dealDoc.status = DealStatus.ACTIVE;
+
+    // Ensure timeline object exists
+    if (!dealDoc.timeline || typeof dealDoc.timeline !== 'object') {
+      dealDoc.timeline = {} as any;
+    }
+    dealDoc.timeline.updatedAt = new Date();
+    dealDoc.markModified('timeline');
+
+    const savedDeal = await dealDoc.save();
+
+    // Send LOI revive email notifications
+    try {
+      const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
+      const seller = await this.sellerModel.findById(dealDoc.seller).exec();
+
+      // Get active and pending buyers from invitation status
+      const activeBuyerIds: string[] = [];
+      const pendingBuyerIds: string[] = [];
+      if (dealDoc.invitationStatus) {
+        const invitationStatusObj = dealDoc.invitationStatus instanceof Map
+          ? Object.fromEntries(dealDoc.invitationStatus)
+          : dealDoc.invitationStatus;
+
+        for (const [buyerId, status] of Object.entries(invitationStatusObj)) {
+          if (status && typeof status === 'object') {
+            const response = (status as any).response;
+            if (response === 'accepted') {
+              activeBuyerIds.push(buyerId);
+            } else if (response === 'pending') {
+              pendingBuyerIds.push(buyerId);
+            }
+          }
+        }
+      }
+
+      // Fetch active buyers info for project owner email
+      const activeBuyers: { fullName: string; companyName: string; email: string }[] = [];
+      for (const buyerId of activeBuyerIds) {
+        const buyer = await this.buyerModel.findById(buyerId).exec();
+        if (buyer) {
+          activeBuyers.push({
+            fullName: buyer.fullName,
+            companyName: buyer.companyName,
+            email: buyer.email,
+          });
+        }
+      }
+
+      // Fetch pending buyers info for project owner email
+      const pendingBuyers: { fullName: string; companyName: string; email: string }[] = [];
+      for (const buyerId of pendingBuyerIds) {
+        const buyer = await this.buyerModel.findById(buyerId).exec();
+        if (buyer) {
+          pendingBuyers.push({
+            fullName: buyer.fullName,
+            companyName: buyer.companyName,
+            email: buyer.email,
+          });
+        }
+      }
+
+      // Build active buyers list HTML for project owner
+      const activeBuyersHtml = activeBuyers.length > 0
+        ? `<p><strong>Active Buyers (${activeBuyers.length}):</strong></p>
+           <ul style="margin: 8px 0; padding-left: 20px;">
+             ${activeBuyers.map(b => `<li style="margin-bottom: 4px;"><strong>${b.fullName}</strong> - ${b.companyName} (${b.email})</li>`).join('')}
+           </ul>`
+        : `<p><strong>Active Buyers:</strong> None</p>`;
+
+      // Build pending buyers list HTML for project owner
+      const pendingBuyersHtml = pendingBuyers.length > 0
+        ? `<p><strong>Pending Buyers (${pendingBuyers.length}):</strong></p>
+           <ul style="margin: 8px 0; padding-left: 20px;">
+             ${pendingBuyers.map(b => `<li style="margin-bottom: 4px;"><strong>${b.fullName}</strong> - ${b.companyName} (${b.email})</li>`).join('')}
+           </ul>`
+        : `<p><strong>Pending Buyers:</strong> None</p>`;
+
+      // Email to Project Owner
+      const ownerSubject = `Deal Revived from LOI: ${dealDoc.title}`;
+      const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
+        <p>A deal has been revived from Letter of Intent (LOI) status and is now active again.</p>
+        <p><strong>Deal:</strong> ${dealDoc.title}</p>
+        <p><strong>Seller:</strong> ${seller?.fullName || 'Unknown'} (${seller?.companyName || 'N/A'})</p>
+        <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
+        ${activeBuyersHtml}
+        ${pendingBuyersHtml}
+      `);
+      await this.mailService.sendEmailWithLogging(
+        'canotifications@amp-ven.com',
+        'admin',
+        ownerSubject,
+        ownerHtmlBody,
+        [ILLUSTRATION_ATTACHMENT],
+        dealIdStr,
+      );
+
+      // Email to Advisor (Seller)
+      if (seller) {
+        const advisorSubject = `Your Deal Is Now Active Again`;
+        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+          <p>Your deal <strong>${dealDoc.title}</strong> has been revived and is now active again on CIM Amplify.</p>
+          <p>Your deal is now visible on the marketplace, and existing active and pending buyers have been notified that the deal is available again.</p>
+          <p>You can manage your deal and view interested buyers from your dashboard.</p>
+          ${emailButton('View Dashboard', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/seller/dashboard`)}
+        `);
+        await this.mailService.sendEmailWithLogging(
+          seller.email,
+          'seller',
+          advisorSubject,
+          advisorHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      }
+
+      // Email to Active Buyers (reuse already fetched buyer data)
+      for (const buyer of activeBuyers) {
+        const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+          <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
+          <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to engage with the advisor if you're still interested.</p>
+          <p>View the deal details and reach out to the advisor directly from your Active deals.</p>
+          ${emailButton('View Active Deals', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/buyer/deals`)}
+        `);
+        await this.mailService.sendEmailWithLogging(
+          buyer.email,
+          'buyer',
+          buyerSubject,
+          buyerHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      }
+
+      // Email to Pending Buyers (reuse already fetched buyer data)
+      for (const buyer of pendingBuyers) {
+        const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+          <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
+          <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to continue your interest in this deal.</p>
+          <p>View your pending deals and respond to the invitation from the advisor.</p>
+          ${emailButton('View My Deals', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/buyer/deals`)}
+        `);
+        await this.mailService.sendEmailWithLogging(
+          buyer.email,
+          'buyer',
+          buyerSubject,
+          buyerHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      }
+    } catch (emailError) {
+      // Log email error but don't fail the revive operation
+      console.error('Failed to send LOI revive email notifications:', emailError);
+    }
+
+    return savedDeal;
+  }
+
+  /**
+   * Get all LOI deals for a seller
+   */
+  async getSellerLOIDeals(sellerId: string): Promise<Deal[]> {
+    return this.dealModel
+      .find({
+        seller: sellerId,
+        status: DealStatus.LOI,
+      })
+      .sort({ 'timeline.updatedAt': -1 })
+      .exec();
   }
 }

@@ -16,7 +16,7 @@ import { ClassificationModule } from './classification/classification.module';
 
 
 import { CronModule } from './cron/cron.module';
-import { TestModule } from './test/test.module';
+// import { TestModule } from './test/test.module'; // Disabled for Vercel
 import { ScheduleModule } from '@nestjs/schedule';
 import * as path from 'path';
 
@@ -31,7 +31,7 @@ import * as path from 'path';
       rootPath: join(__dirname, "..", "Uploads"),
       serveRoot: "/Uploads",
     }),
-    ScheduleModule.forRoot(),
+    // ScheduleModule.forRoot(), // Disabled for Vercel (10s timeout)
     BuyersModule,
     AuthModule,
     CompanyProfileModule,
@@ -40,8 +40,8 @@ import * as path from 'path';
     DealsModule,
     DealTrackingModule,
     MailModule,
-    CronModule,
-    TestModule,
+    // CronModule, // Disabled for Vercel
+    // TestModule, // Disabled for Vercel
     ClassificationModule,
   ],
   providers: [],

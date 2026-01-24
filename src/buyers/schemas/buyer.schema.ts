@@ -75,6 +75,10 @@ export class Buyer {
   @Prop({ default: null })
   lastProfileCompletionReminderSentAt: Date;
 
+  @ApiProperty({ description: "How the user heard about CIM Amplify" })
+  @Prop({ required: false, default: "" })
+  referralSource: string
+
   // Ensure Mongoose methods are properly typed
   toObject?(): any
 }

@@ -10,6 +10,7 @@ import { BuyersService } from "../buyers/buyers.service"
 import { UpdateCompanyProfileDto } from "../company-profile/dto/update-company-profile.dto"
 import { UnauthorizedException } from "@nestjs/common"
 import { SellersService } from "../sellers/sellers.service"
+import { UpdateSellerDto } from "../sellers/dto/update-seller.dto"
 
 interface RequestWithUser extends Request {
   user: {
@@ -179,6 +180,24 @@ export class AdminController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
+  @Patch('buyers/:id')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update a buyer (admin only)' })
+  @ApiParam({ name: 'id', type: String, description: 'Buyer ID' })
+  @ApiResponse({ status: 200, description: 'Buyer updated successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires admin role' })
+  @ApiResponse({ status: 404, description: 'Buyer not found' })
+  async updateBuyer(@Param('id') id: string, @Body() updateData: any) {
+    // Convert phoneNumber to phone if provided (frontend uses phoneNumber, backend uses phone)
+    if (updateData.phoneNumber !== undefined) {
+      updateData.phone = updateData.phoneNumber;
+      delete updateData.phoneNumber;
+    }
+    return this.adminService.updateBuyer(id, updateData);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @Delete('buyers/:id')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a buyer (admin only)' })
@@ -224,6 +243,19 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'Seller not found' })
   async getSeller(@Param('id') id: string) {
     return this.sellersService.findById(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Patch('sellers/:id')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update a seller (admin only)' })
+  @ApiParam({ name: 'id', type: String, description: 'Seller ID' })
+  @ApiResponse({ status: 200, description: 'Seller updated successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires admin role' })
+  @ApiResponse({ status: 404, description: 'Seller not found' })
+  async updateSeller(@Param('id') id: string, @Body() updateSellerDto: UpdateSellerDto) {
+    return this.sellersService.update(id, updateSellerDto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, MinLength, IsString } from "class-validator"
+import { IsEmail, IsNotEmpty, MinLength, IsString, IsOptional } from "class-validator"
 import { ApiProperty } from "@nestjs/swagger"
 
 export class CreateBuyerDto {
@@ -29,4 +29,9 @@ export class CreateBuyerDto {
   @IsNotEmpty()
   @IsString()
   website: string
+
+  @ApiProperty({ example: "LinkedIn", description: "How the user heard about CIM Amplify" })
+  @IsString()
+  @IsOptional()
+  referralSource?: string
 }

@@ -166,6 +166,65 @@ export class AdminService {
     };
   }
 
+  async updateBuyer(id: string, updateData: any): Promise<any> {
+    const buyer = await this.buyerModel.findById(id).exec()
+    if (!buyer) {
+      throw new NotFoundException("Buyer not found")
+    }
+
+    // Hash password if being updated
+    if (updateData.password && updateData.password.trim() !== '') {
+      updateData.password = await bcrypt.hash(updateData.password, 10);
+    } else {
+      delete updateData.password;
+    }
+
+    // Update buyer fields
+    Object.assign(buyer, updateData)
+    await buyer.save()
+
+    // Sync to company profile if exists
+    if (buyer.companyProfileId) {
+      const companyProfile = await this.companyProfileModel.findById(buyer.companyProfileId).exec();
+      if (companyProfile) {
+        let profileUpdated = false;
+
+        // Update company-level fields
+        if (updateData.companyName) {
+          companyProfile.companyName = updateData.companyName;
+          profileUpdated = true;
+        }
+        if (updateData.website) {
+          companyProfile.website = updateData.website;
+          profileUpdated = true;
+        }
+
+        // Update first contact with buyer info
+        if (updateData.fullName || updateData.email || updateData.phone) {
+          if (!companyProfile.contacts || companyProfile.contacts.length === 0) {
+            companyProfile.contacts = [{
+              name: updateData.fullName || buyer.fullName || '',
+              email: updateData.email || buyer.email || '',
+              phone: updateData.phone || buyer.phone || ''
+            }];
+          } else {
+            // Update first contact
+            if (updateData.fullName) companyProfile.contacts[0].name = updateData.fullName;
+            if (updateData.email) companyProfile.contacts[0].email = updateData.email;
+            if (updateData.phone) companyProfile.contacts[0].phone = updateData.phone;
+          }
+          profileUpdated = true;
+        }
+
+        if (profileUpdated) {
+          await companyProfile.save();
+        }
+      }
+    }
+
+    return buyer;
+  }
+
   async deleteBuyer(id: string): Promise<void> {
     const result = await this.buyerModel.findByIdAndDelete(id).exec()
     if (!result) {
