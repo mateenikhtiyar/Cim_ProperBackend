@@ -1,7 +1,7 @@
 const { MongoClient } = require('mongodb');
 
 // MongoDB connection string from .env
-const MONGO_URI = 'mongodb+srv://johnm_db_user:IL1YPAAzFB8TRUIt@cimamplify.ogypnuw.mongodb.net/';
+const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/cimamplify';
 
 async function updateMarketplaceDeals() {
   const client = new MongoClient(MONGO_URI);
