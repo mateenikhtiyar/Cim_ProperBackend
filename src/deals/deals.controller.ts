@@ -217,7 +217,7 @@ export class DealsController {
 
       // Save the deal
       const result = await this.dealsService.create(dealWithSellerAndDocuments);
-      console.log('Deal created successfully:', result._id);
+      console.log('Deal created successfully:', (result as any)._id);
       return result;
     } catch (error) {
       console.error('Deal creation error:', error);
