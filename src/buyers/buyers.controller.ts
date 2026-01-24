@@ -185,19 +185,39 @@ export class BuyersController {
   }
   */
 
-  // Temporary endpoint that returns error for file uploads on Vercel
+  // Base64 profile picture upload endpoint
   @UseGuards(JwtAuthGuard)
   @Post("upload-profile-picture")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Upload profile picture (disabled on Vercel)" })
-  @ApiResponse({ status: 501, description: "File uploads not supported on Vercel" })
+  @ApiOperation({ summary: "Upload profile picture as base64" })
+  @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
   async uploadProfilePicture(
-    @Request() req: any
+    @Request() req: any,
+    @Body() body: { profilePicture: string }
   ) {
-    return {
-      error: "File uploads are not supported on Vercel's read-only filesystem",
-      message: "Please use Cloudinary or AWS S3 for file uploads",
-      documentation: "See CLOUDINARY-SETUP.md in the repository"
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    if (!body.profilePicture) {
+      return { error: "No profile picture data provided" };
+    }
+
+    // Validate base64 image format
+    if (!body.profilePicture.startsWith('data:image/')) {
+      return { error: "Invalid image format. Please provide a valid base64 image." };
+    }
+
+    try {
+      await this.buyersService.updateProfilePicture(req.user.userId, body.profilePicture);
+      return {
+        message: "Profile picture uploaded successfully",
+        profilePicture: body.profilePicture
+      };
+    } catch (error) {
+      console.error("Error updating profile picture:", error);
+      return { error: "Failed to update profile picture" };
     }
   }
 
@@ -258,19 +278,39 @@ export class BuyersController {
   }
   */
 
-  // Temporary endpoint that returns error for file uploads on Vercel
+  // Alternative base64 profile picture upload endpoint
   @UseGuards(JwtAuthGuard)
   @Post("profile/picture")
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Upload profile picture (disabled on Vercel)" })
-  @ApiResponse({ status: 501, description: "File uploads not supported on Vercel" })
+  @ApiOperation({ summary: "Upload profile picture as base64 (alternative endpoint)" })
+  @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
   async uploadProfilePictureAlt(
-    @Request() req: any
+    @Request() req: any,
+    @Body() body: { profilePicture: string }
   ) {
-    return {
-      error: "File uploads are not supported on Vercel's read-only filesystem",
-      message: "Please use Cloudinary or AWS S3 for file uploads",
-      documentation: "See CLOUDINARY-SETUP.md in the repository"
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    if (!body.profilePicture) {
+      return { error: "No profile picture data provided" };
+    }
+
+    // Validate base64 image format
+    if (!body.profilePicture.startsWith('data:image/')) {
+      return { error: "Invalid image format. Please provide a valid base64 image." };
+    }
+
+    try {
+      await this.buyersService.updateProfilePicture(req.user.userId, body.profilePicture);
+      return {
+        message: "Profile picture uploaded successfully",
+        profilePicture: body.profilePicture
+      };
+    } catch (error) {
+      console.error("Error updating profile picture:", error);
+      return { error: "Failed to update profile picture" };
     }
   }
 

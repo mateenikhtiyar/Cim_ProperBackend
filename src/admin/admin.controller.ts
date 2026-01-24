@@ -72,6 +72,42 @@ export class AdminController {
     return result;
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @Post('upload-profile-picture')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Upload admin profile picture as base64' })
+  @ApiResponse({ status: 200, description: 'Profile picture uploaded successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async uploadProfilePicture(@Request() req: RequestWithUser, @Body() body: { profilePicture: string }) {
+    if (!req.user?.userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    if (!body.profilePicture) {
+      return { error: "No profile picture data provided" };
+    }
+
+    // Validate base64 image format
+    if (!body.profilePicture.startsWith('data:image/')) {
+      return { error: "Invalid image format. Please provide a valid base64 image." };
+    }
+
+    try {
+      const updated = await this.adminService.updateProfile(req.user.userId, { profilePicture: body.profilePicture });
+      const result = updated.toObject ? updated.toObject() : { ...updated };
+      delete result.password;
+      return {
+        message: "Profile picture uploaded successfully",
+        profilePicture: body.profilePicture,
+        profile: result
+      };
+    } catch (error) {
+      console.error("Error updating admin profile picture:", error);
+      return { error: "Failed to update profile picture" };
+    }
+  }
+
   // Company Profile Management for Admins
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("admin")
