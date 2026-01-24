@@ -44,7 +44,17 @@ async function bootstrap() {
     origin: true, // Allow all origins for now
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: [
+      'Content-Type', 
+      'Authorization', 
+      'Accept',
+      'Cache-Control',
+      'X-Requested-With',
+      'Origin',
+      'Access-Control-Request-Method',
+      'Access-Control-Request-Headers'
+    ],
+    exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
   })
 
   // Increase body size limit for large uploads (e.g., base64 images)
