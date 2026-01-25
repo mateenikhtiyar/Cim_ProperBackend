@@ -182,7 +182,6 @@ export class DealsController {
     @Body() body: any, // Accept any body type
     @Request() req: RequestWithUser,
   ) {
-    console.log('Deal creation request received:', { userId: req.user?.userId, bodyKeys: Object.keys(body || {}) });
     
     if (!req.user?.userId) {
       throw new UnauthorizedException('User not authenticated')
@@ -199,7 +198,6 @@ export class DealsController {
         // Direct JSON body approach
         createDealDto = body as CreateDealDto
       } else {
-        console.error('Invalid request body structure:', body);
         throw new BadRequestException('Invalid request body: expected dealData string or deal object')
       }
 
@@ -213,14 +211,10 @@ export class DealsController {
         documents,
       }
 
-      console.log('Creating deal with data:', { title: dealWithSellerAndDocuments.title, seller: dealWithSellerAndDocuments.seller });
-
       // Save the deal
       const result = await this.dealsService.create(dealWithSellerAndDocuments);
-      console.log('Deal created successfully:', (result as any)._id);
       return result;
     } catch (error) {
-      console.error('Deal creation error:', error);
       throw error;
     }
   }
@@ -948,7 +942,6 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
         deal: closedDeal,
       }
     } catch (error) {
-      console.error("Error closing deal:", error)
       throw error
     }
   }

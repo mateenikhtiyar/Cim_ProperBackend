@@ -47,11 +47,9 @@ export class DealsService {
 
   async create(createDealDto: CreateDealDto): Promise<Deal> {
     try {
-      // Remove all debug logs
-      // Ensure documents field is properly set
       const dealData = {
         ...createDealDto,
-        documents: createDealDto.documents || [], // This will now contain the file paths
+        documents: createDealDto.documents || [],
         createdAt: new Date(),
         updatedAt: new Date(),
       }
@@ -107,7 +105,6 @@ export class DealsService {
 
       return savedDeal
     } catch (error) {
-      console.error("Error creating deal:", error)
       throw error
     }
   }
@@ -416,7 +413,6 @@ export class DealsService {
         );
       }
     } catch (emailError) {
-      console.error('Failed to send marketplace introduction emails:', emailError);
       // Don't fail the operation if emails fail
     }
 
@@ -1634,27 +1630,14 @@ export class DealsService {
       await dealDoc.save() // Now calling save() on the document
 
       // Send email notifications based on status
-      console.log('[Introduction Email] Status is:', status);
       if (status === "active") {
-        console.log('[Introduction Email] Entering active status block');
         // Buyer accepts deal: Send introduction email to seller and buyer
         const seller = await this.sellerModel.findById(dealDoc.seller).exec();
         const buyer = await this.buyerModel.findById(buyerId).exec();
         const companyProfile = await this.dealModel.db.model('CompanyProfile').findOne({ buyer: buyerId }).lean();
 
-        // Debug logging for NDA
-        console.log('[Introduction Email] Deal:', dealDoc.title);
-        console.log('[Introduction Email] Seller found:', !!seller);
-        console.log('[Introduction Email] Buyer found:', !!buyer);
-        console.log('[Introduction Email] Has NDA Document:', !!dealDoc.ndaDocument);
-        if (dealDoc.ndaDocument) {
-          console.log('[Introduction Email] NDA Original Name:', dealDoc.ndaDocument.originalName);
-          console.log('[Introduction Email] NDA Has Base64:', !!dealDoc.ndaDocument.base64Content);
-        }
-
         // Email to Advisor (Seller)
         if (seller && buyer) {
-          console.log('[Introduction Email] Both advisor and buyer found, preparing emails');
           const advisorSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
           const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
             <p>${buyer.fullName} at ${buyer.companyName} is interested in learning more about ${dealDoc.title}.  If you attached an NDA to this deal it has already been sent to the buyer for execution.</p>
@@ -1670,7 +1653,6 @@ export class DealsService {
           `);
 
           try {
-            console.log('[Introduction Email] Sending email to advisor:', seller.email);
             await this.mailService.sendEmailWithLogging(
               seller.email,
               'seller',
@@ -1679,9 +1661,8 @@ export class DealsService {
               [ILLUSTRATION_ATTACHMENT], // attachments
               (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
             );
-            console.log('[Introduction Email] Email sent successfully to advisor');
           } catch (advisorEmailError) {
-            console.error('[Introduction Email] Failed to send email to advisor:', advisorEmailError);
+            // Failed to send email to advisor
           }
 
           const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
@@ -1735,12 +1716,8 @@ export class DealsService {
           // Build attachments array - include NDA if available
           const buyerAttachments: any[] = [ILLUSTRATION_ATTACHMENT];
           if (hasNda && dealDoc.ndaDocument) {
-            console.log('[Introduction Email] Adding NDA attachment:', dealDoc.ndaDocument.originalName);
-            console.log('[Introduction Email] NDA base64 length:', dealDoc.ndaDocument.base64Content?.length || 0);
-
             // Convert base64 string to Buffer for nodemailer
             const ndaBuffer = Buffer.from(dealDoc.ndaDocument.base64Content, 'base64');
-            console.log('[Introduction Email] NDA buffer size:', ndaBuffer.length);
 
             buyerAttachments.push({
               filename: dealDoc.ndaDocument.originalName,
@@ -1750,7 +1727,6 @@ export class DealsService {
           }
 
           try {
-            console.log('[Introduction Email] Sending email to buyer:', buyer.email);
             await this.mailService.sendEmailWithLogging(
               buyer.email,
               'buyer',
@@ -1759,9 +1735,8 @@ export class DealsService {
               buyerAttachments,
               (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
             );
-            console.log('[Introduction Email] Email sent successfully to buyer');
           } catch (emailError) {
-            console.error('[Introduction Email] Failed to send email to buyer:', emailError);
+            // Failed to send email to buyer
           }
         }
       } else if (status === "rejected") {
@@ -2016,7 +1991,6 @@ export class DealsService {
       const result = await dealTrackingModel.aggregate(pipeline).exec();
       return result.filter(item => mongoose.isValidObjectId(item.buyerId));
     } catch (error) {
-      console.error('Error in getBuyerInteractionsForDeal:', error);
       throw new InternalServerErrorException(`Failed to get buyer interactions: ${error.message}`);
     }
   }
@@ -2070,7 +2044,6 @@ export class DealsService {
 
       return result;
     } catch (error) {
-      console.error('Error in getEverActiveBuyers:', error);
       throw new InternalServerErrorException(`Failed to get ever active buyers: ${error.message}`);
     }
   }
@@ -2204,7 +2177,6 @@ export class DealsService {
       };
       return result;
     } catch (error) {
-      console.error('Error in getDealWithBuyerStatusSummary:', error);
       throw new InternalServerErrorException(`Failed to get deal with buyer status: ${error.message}`);
     }
   }
@@ -2440,7 +2412,6 @@ export class DealsService {
       }
     } catch (error) {
       // Log but don't fail the operation if notification emails fail
-      console.error('Error sending off-market notifications to buyers:', error);
     }
 
     return savedDeal;
@@ -2518,7 +2489,6 @@ export class DealsService {
         deal: await this.findOne(dealId),
       };
     } catch (error) {
-      console.error('Error in getDetailedBuyerActivity:', error);
       throw new InternalServerErrorException(`Failed to get detailed buyer activity: ${error.message}`);
     }
   }
@@ -2594,7 +2564,6 @@ export class DealsService {
 
       return await dealTrackingModel.aggregate(pipeline).exec();
     } catch (error) {
-      console.error('Error in getRecentBuyerActionsForSeller:', error);
       throw new InternalServerErrorException(`Failed to get recent buyer actions: ${error.message}`);
     }
   }
@@ -2658,7 +2627,6 @@ export class DealsService {
         (a, b) => new Date(b.lastInteraction || 0).getTime() - new Date(a.lastInteraction || 0).getTime(),
       );
     } catch (error) {
-      console.error('Error in getInterestedBuyersDetails:', error);
       throw new InternalServerErrorException(`Failed to get interested buyers details: ${error.message}`);
     }
   }
@@ -2667,7 +2635,6 @@ export class DealsService {
     try {
       return await this.dealModel.find({ status: 'completed' }).select('+rewardLevel').exec();
     } catch (error) {
-      console.error('Error in getAllCompletedDeals:', error);
       throw new InternalServerErrorException(`Failed to fetch completed deals: ${error.message}`);
     }
   }
@@ -2695,7 +2662,6 @@ export class DealsService {
         .exec();
       return result;
     } catch (error) {
-      console.error('Error in getAllActiveDealsWithAccepted:', error);
       throw new InternalServerErrorException(`Failed to fetch deals with accepted invitations: ${error.message}`);
     }
   }
@@ -2814,7 +2780,6 @@ export class DealsService {
         },
       };
     } catch (error) {
-      console.error('Error in getBuyerEngagementDashboard:', error);
       throw new InternalServerErrorException(`Failed to get buyer engagement dashboard: ${error.message}`);
     }
   }
@@ -3274,7 +3239,6 @@ export class DealsService {
       }
     } catch (emailError) {
       // Log email error but don't fail the LOI operation
-      console.error('Failed to send LOI pause email notifications:', emailError);
     }
 
     return savedDeal;
@@ -3458,7 +3422,6 @@ export class DealsService {
       }
     } catch (emailError) {
       // Log email error but don't fail the revive operation
-      console.error('Failed to send LOI revive email notifications:', emailError);
     }
 
     return savedDeal;
