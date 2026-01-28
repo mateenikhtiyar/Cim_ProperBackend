@@ -3013,6 +3013,7 @@ export class DealsService {
     totalSellers: number;
     dealsThisMonth: number;
     dealsLastMonth: number;
+    marketplaceDeals: number;
   }> {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -3028,6 +3029,7 @@ export class DealsService {
       totalSellers,
       dealsThisMonth,
       dealsLastMonth,
+      marketplaceDeals,
     ] = await Promise.all([
       this.dealModel.countDocuments({}).exec(),
       this.dealModel.countDocuments({ status: { $nin: ['completed', 'loi'] } }).exec(),
@@ -3039,6 +3041,7 @@ export class DealsService {
       this.dealModel.countDocuments({
         createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
       }).exec(),
+      this.dealModel.countDocuments({ isPublic: true, status: 'active' }).exec(),
     ]);
 
     return {
@@ -3050,6 +3053,7 @@ export class DealsService {
       totalSellers,
       dealsThisMonth,
       dealsLastMonth,
+      marketplaceDeals,
     };
   }
 
