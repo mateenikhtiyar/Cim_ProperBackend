@@ -1444,67 +1444,100 @@ export class DealsService {
           invitedAt: new Date(),
           response: "pending",
         });
-
-        // Send email to invited buyer
-        const buyer = await this.buyerModel.findById(buyerId).exec();
-        if (buyer) {
-          const dealIdStr =
-            deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
-
-          const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingRevenueAmount || 0);
-          const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
-          const subject = `YOU ARE INVITED TO PARTICIPATE IN A ${trailingEBITDAAmount} DEAL`;
-
-          // Build action URLs for email buttons
-          const activateUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=activate&dealId=${dealIdStr}`;
-          const passUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=pass&dealId=${dealIdStr}`;
-
-          const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-            <p><b>Details:</b> ${deal.companyDescription}</p>
-            <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
-            <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
-
-            <!-- Action Buttons -->
-            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 24px 0;">
-              <tr>
-                <td align="center">
-                  <table border="0" cellpadding="0" cellspacing="0">
-                    <tr>
-                      <td align="center" style="padding-right: 12px;">
-                        <a href="${activateUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #3AAFA9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Move to Active / Request Info</a>
-                      </td>
-                      <td align="center" style="padding-left: 12px;">
-                        <a href="${passUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #E35153; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Pass</a>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-
-            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard under Pending to see more details.</p>
-            <p>Please keep your dashboard up to date by responding to Pending deals promptly.</p>
-            ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
-          `);
-
-          await this.mailService.sendEmailWithLogging(
-            buyer.email,
-            'buyer',
-            subject,
-            htmlBody,
-            [ILLUSTRATION_ATTACHMENT], // attachments
-            dealIdStr, // relatedDealId
-          );
-        }
       }
 
+      // Save deal FIRST so targeting is persisted regardless of email outcome
       deal.timeline.updatedAt = new Date();
       await deal.save();
+
+      // Send emails in the background - don't block the API response
+      const dealIdStr =
+        deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
+
+      this.sendBuyerInviteEmails(deal, newTargets, dealIdStr).catch((err) => {
+        console.error(`Background email sending completed with errors for deal ${dealIdStr}:`, err.message);
+      });
     }
 
     return deal;
   }
 
+  /**
+   * Sends invite emails to buyers in batches to avoid Gmail rate limiting.
+   * Runs in the background - errors are logged but don't affect the API response.
+   */
+  private async sendBuyerInviteEmails(
+    deal: DealDocument,
+    buyerIds: string[],
+    dealIdStr: string,
+  ): Promise<void> {
+    const BATCH_SIZE = 5;
+    const DELAY_BETWEEN_BATCHES_MS = 3000;
+
+    const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingRevenueAmount || 0);
+    const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
+
+    for (let i = 0; i < buyerIds.length; i += BATCH_SIZE) {
+      const batch = buyerIds.slice(i, i + BATCH_SIZE);
+
+      // Add delay between batches (skip delay for the first batch)
+      if (i > 0) {
+        await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS));
+      }
+
+      await Promise.allSettled(
+        batch.map(async (buyerId) => {
+          try {
+            const buyer = await this.buyerModel.findById(buyerId).exec();
+            if (!buyer) return;
+
+            const subject = `YOU ARE INVITED TO PARTICIPATE IN A ${trailingEBITDAAmount} DEAL`;
+            const activateUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=activate&dealId=${dealIdStr}`;
+            const passUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=pass&dealId=${dealIdStr}`;
+
+            const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+              <p><b>Details:</b> ${deal.companyDescription}</p>
+              <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
+              <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
+
+              <!-- Action Buttons -->
+              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 24px 0;">
+                <tr>
+                  <td align="center">
+                    <table border="0" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td align="center" style="padding-right: 12px;">
+                          <a href="${activateUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #3AAFA9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Move to Active / Request Info</a>
+                        </td>
+                        <td align="center" style="padding-left: 12px;">
+                          <a href="${passUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #E35153; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Pass</a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard under Pending to see more details.</p>
+              <p>Please keep your dashboard up to date by responding to Pending deals promptly.</p>
+              ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
+            `);
+
+            await this.mailService.sendEmailWithLogging(
+              buyer.email,
+              'buyer',
+              subject,
+              htmlBody,
+              [ILLUSTRATION_ATTACHMENT],
+              dealIdStr,
+            );
+          } catch (emailError) {
+            console.error(`Failed to send invite email to buyer ${buyerId}:`, emailError.message);
+          }
+        }),
+      );
+    }
+  }
 
   async updateDealStatus(dealId: string, buyerId: string, status: "pending" | "active" | "rejected"): Promise<any> {
     try {
@@ -1750,14 +1783,18 @@ export class DealsService {
             <p>${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}. You can view all of your buyer activity on your dashboard.</p>
             ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/seller/dashboard`)}
           `);
-          await this.mailService.sendEmailWithLogging(
-            seller.email,
-            'seller',
-            subject,
-            htmlBody,
-            [ILLUSTRATION_ATTACHMENT], // attachments
-            (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
-          );
+          try {
+            await this.mailService.sendEmailWithLogging(
+              seller.email,
+              'seller',
+              subject,
+              htmlBody,
+              [ILLUSTRATION_ATTACHMENT], // attachments
+              (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
+            );
+          } catch (rejectionEmailError) {
+            console.error(`Failed to send rejection notification email for deal ${dealId}:`, rejectionEmailError.message);
+          }
         }
       }
 
