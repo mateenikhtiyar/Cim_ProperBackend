@@ -24,6 +24,11 @@ export class MailService {
 
   private transporter = nodemailer.createTransport({
     service: 'gmail',
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 50,
+    rateDelta: 2000,
+    rateLimit: 5,
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
