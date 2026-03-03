@@ -138,8 +138,11 @@ export class BuyersService {
   }
 
   async findAll(page: number = 1, limit: number = 10, search: string = '', sortBy: string = '', dealStatus: string = ''): Promise<any> {
+    console.log('[BUYERS SERVICE] === findAll called ===');
+    console.log('[BUYERS SERVICE] Parameters:', { page, limit, search, sortBy, dealStatus });
+
     const skip = (page - 1) * limit;
-    
+
     // Build search query
     const searchQuery: any = search ? {
       $or: [
@@ -309,7 +312,23 @@ export class BuyersService {
       ];
 
       // Use native MongoDB collection to ensure allowDiskUse is properly applied
-      const buyers = await this.buyerModel.collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
+      console.log('[BUYERS SERVICE - DEAL STATUS FILTER] Executing buyer aggregation');
+      console.log('[BUYERS SERVICE - DEAL STATUS FILTER] Pipeline length:', pipeline.length);
+      console.log('[BUYERS SERVICE - DEAL STATUS FILTER] Using allowDiskUse: true');
+      console.log('[BUYERS SERVICE - DEAL STATUS FILTER] DealStatus:', dealStatus, 'ResponseKey:', responseKey);
+      console.log('[BUYERS SERVICE - DEAL STATUS FILTER] Page:', page, 'Limit:', limit, 'Skip:', skip);
+
+      let buyers;
+      try {
+        buyers = await this.buyerModel.collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
+        console.log('[BUYERS SERVICE - DEAL STATUS FILTER] Buyer aggregation completed successfully');
+        console.log('[BUYERS SERVICE - DEAL STATUS FILTER] Found buyers count:', buyers.length);
+      } catch (error) {
+        console.error('[BUYERS SERVICE - DEAL STATUS FILTER] Aggregation error:', error);
+        console.error('[BUYERS SERVICE - DEAL STATUS FILTER] Error name:', error.name);
+        console.error('[BUYERS SERVICE - DEAL STATUS FILTER] Error message:', error.message);
+        throw error;
+      }
       const totalBuyersPipeline = [
         { $match: searchQuery },
         { $addFields: { buyerIdStr: { $toString: '$_id' } } },
@@ -359,7 +378,21 @@ export class BuyersService {
         { $match: { filteredDealsCount: { $gt: 0 } } },
         { $count: 'count' }
       ];
-      const totalBuyersResult = await this.buyerModel.collection.aggregate(totalBuyersPipeline, { allowDiskUse: true }).toArray();
+
+      console.log('[BUYERS SERVICE - TOTAL COUNT] Executing total buyers count aggregation');
+      console.log('[BUYERS SERVICE - TOTAL COUNT] Using allowDiskUse: true');
+
+      let totalBuyersResult;
+      try {
+        totalBuyersResult = await this.buyerModel.collection.aggregate(totalBuyersPipeline, { allowDiskUse: true }).toArray();
+        const totalCount = totalBuyersResult.length > 0 ? totalBuyersResult[0].count : 0;
+        console.log('[BUYERS SERVICE - TOTAL COUNT] Total count:', totalCount);
+      } catch (error) {
+        console.error('[BUYERS SERVICE - TOTAL COUNT] Aggregation error:', error);
+        console.error('[BUYERS SERVICE - TOTAL COUNT] Error name:', error.name);
+        console.error('[BUYERS SERVICE - TOTAL COUNT] Error message:', error.message);
+        throw error;
+      }
       const totalCount = totalBuyersResult.length > 0 ? totalBuyersResult[0].count : 0;
       
       return {
@@ -429,7 +462,22 @@ export class BuyersService {
       ];
 
       // Use native MongoDB collection to ensure allowDiskUse is properly applied
-      const buyers = await this.buyerModel.collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
+      console.log('[BUYERS SERVICE - DEAL SORT] Executing buyer aggregation with deal sorting');
+      console.log('[BUYERS SERVICE - DEAL SORT] Pipeline length:', pipeline.length);
+      console.log('[BUYERS SERVICE - DEAL SORT] Using allowDiskUse: true');
+      console.log('[BUYERS SERVICE - DEAL SORT] SortBy:', sortBy, 'Field:', field, 'Order:', order);
+
+      let buyers;
+      try {
+        buyers = await this.buyerModel.collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
+        console.log('[BUYERS SERVICE - DEAL SORT] Buyer aggregation completed successfully');
+        console.log('[BUYERS SERVICE - DEAL SORT] Found buyers count:', buyers.length);
+      } catch (error) {
+        console.error('[BUYERS SERVICE - DEAL SORT] Aggregation error:', error);
+        console.error('[BUYERS SERVICE - DEAL SORT] Error name:', error.name);
+        console.error('[BUYERS SERVICE - DEAL SORT] Error message:', error.message);
+        throw error;
+      }
       const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
       
       return {
