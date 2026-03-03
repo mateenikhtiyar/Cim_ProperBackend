@@ -308,7 +308,8 @@ export class BuyersService {
         { $addFields: { companyProfileId: { $arrayElemAt: ['$companyProfileId', 0] } } }
       ];
 
-      const buyers = await this.buyerModel.aggregate(pipeline).option({ allowDiskUse: true }).exec();
+      // Use native MongoDB collection to ensure allowDiskUse is properly applied
+      const buyers = await this.buyerModel.collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
       const totalBuyersPipeline = [
         { $match: searchQuery },
         { $addFields: { buyerIdStr: { $toString: '$_id' } } },
@@ -355,10 +356,11 @@ export class BuyersService {
             }
           }
         },
-        { $match: { filteredDealsCount: { $gt: 0 } } }
+        { $match: { filteredDealsCount: { $gt: 0 } } },
+        { $count: 'count' }
       ];
-      const totalBuyers = await this.buyerModel.aggregate(totalBuyersPipeline).option({ allowDiskUse: true }).count('count').exec();
-      const totalCount = totalBuyers.length > 0 ? totalBuyers[0].count : 0;
+      const totalBuyersResult = await this.buyerModel.collection.aggregate(totalBuyersPipeline, { allowDiskUse: true }).toArray();
+      const totalCount = totalBuyersResult.length > 0 ? totalBuyersResult[0].count : 0;
       
       return {
         data: buyers.map((buyer: any) => ({
@@ -426,7 +428,8 @@ export class BuyersService {
         }
       ];
 
-      const buyers = await this.buyerModel.aggregate(pipeline).option({ allowDiskUse: true }).exec();
+      // Use native MongoDB collection to ensure allowDiskUse is properly applied
+      const buyers = await this.buyerModel.collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
       const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
       
       return {
