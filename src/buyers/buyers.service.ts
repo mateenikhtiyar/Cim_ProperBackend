@@ -153,8 +153,47 @@ export class BuyersService {
       ]
     } : {};
     
-    // Add deal status filter if provided
+    // Add deal status filter if provided - USE DENORMALIZED COUNTS
     if (dealStatus && (dealStatus === 'active' || dealStatus === 'pending' || dealStatus === 'rejected')) {
+      console.log('[BUYERS SERVICE] Using OPTIMIZED query with denormalized counts');
+
+      // Use denormalized count fields instead of complex aggregation
+      const dealCountField = dealStatus === 'active' ? 'activeDealsCount' :
+                             dealStatus === 'pending' ? 'pendingDealsCount' :
+                             'rejectedDealsCount';
+
+      searchQuery[dealCountField] = { $gt: 0 };
+
+      // Simple query using denormalized fields
+      const buyers = await this.buyerModel
+        .find(searchQuery)
+        .populate("companyProfileId")
+        .sort({ _id: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .exec();
+
+      const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
+
+      console.log('[BUYERS SERVICE] Optimized query completed. Found:', buyers.length);
+
+      return {
+        data: buyers.map((buyer: any) => ({
+          ...buyer,
+          companyProfile: buyer.companyProfileId,
+          activeDealsCount: buyer.activeDealsCount,
+          pendingDealsCount: buyer.pendingDealsCount,
+          rejectedDealsCount: buyer.rejectedDealsCount
+        })),
+        total: totalBuyers,
+        page,
+        lastPage: Math.ceil(totalBuyers / limit),
+      };
+    }
+
+    // OLD COMPLEX AGGREGATION (FALLBACK - REMOVE AFTER MIGRATION)
+    if (false && dealStatus && (dealStatus === 'active' || dealStatus === 'pending' || dealStatus === 'rejected')) {
       const responseKey = dealStatus === 'active' ? 'accepted' : dealStatus;
       // Use aggregation to filter by deal status and include per-buyer invitationStatus counts
       const pipeline = [
@@ -702,5 +741,67 @@ export class BuyersService {
 
     buyer.profilePicture = profilePicturePath;
     return buyer.save();
+  }
+
+  /**
+   * Update denormalized deal counts for a buyer
+   * Call this method whenever a deal's invitation status changes
+   */
+  async updateBuyerDealCounts(buyerId: string): Promise<void> {
+    const dealModel = this.buyerModel.db.model('Deal');
+
+    // Get all non-completed deals for this buyer
+    const deals = await dealModel.find({
+      targetedBuyers: buyerId,
+      status: { $ne: 'completed' }
+    }).lean().exec();
+
+    // Calculate counts
+    let activeCount = 0;
+    let pendingCount = 0;
+    let rejectedCount = 0;
+
+    for (const deal of deals) {
+      const invitationStatus = deal.invitationStatus || {};
+      const buyerStatus = invitationStatus[buyerId];
+
+      if (buyerStatus) {
+        if (buyerStatus.response === 'accepted') activeCount++;
+        else if (buyerStatus.response === 'pending') pendingCount++;
+        else if (buyerStatus.response === 'rejected') rejectedCount++;
+      }
+    }
+
+    // Update buyer document
+    await this.buyerModel.updateOne(
+      { _id: buyerId },
+      {
+        $set: {
+          activeDealsCount: activeCount,
+          pendingDealsCount: pendingCount,
+          rejectedDealsCount: rejectedCount
+        }
+      }
+    ).exec();
+
+    console.log(`[BUYERS SERVICE] Updated deal counts for buyer ${buyerId}: active=${activeCount}, pending=${pendingCount}, rejected=${rejectedCount}`);
+  }
+
+  /**
+   * Bulk update deal counts for multiple buyers
+   * More efficient when updating many buyers at once
+   */
+  async bulkUpdateBuyerDealCounts(buyerIds: string[]): Promise<void> {
+    console.log(`[BUYERS SERVICE] Bulk updating deal counts for ${buyerIds.length} buyers`);
+
+    for (const buyerId of buyerIds) {
+      try {
+        await this.updateBuyerDealCounts(buyerId);
+      } catch (error) {
+        console.error(`[BUYERS SERVICE] Error updating counts for buyer ${buyerId}:`, error);
+      }
+    }
+
+    console.log(`[BUYERS SERVICE] Bulk update completed`);
   }
 }

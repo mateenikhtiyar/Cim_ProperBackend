@@ -79,6 +79,19 @@ export class Buyer {
   @Prop({ required: false, default: "" })
   referralSource: string
 
+  // Denormalized deal counts for performance
+  @ApiProperty({ description: "Number of active deals", default: 0 })
+  @Prop({ default: 0 })
+  activeDealsCount: number
+
+  @ApiProperty({ description: "Number of pending deals", default: 0 })
+  @Prop({ default: 0 })
+  pendingDealsCount: number
+
+  @ApiProperty({ description: "Number of rejected deals", default: 0 })
+  @Prop({ default: 0 })
+  rejectedDealsCount: number
+
   // Ensure Mongoose methods are properly typed
   toObject?(): any
 }
