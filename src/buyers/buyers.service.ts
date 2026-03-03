@@ -307,8 +307,8 @@ export class BuyersService {
         },
         { $addFields: { companyProfileId: { $arrayElemAt: ['$companyProfileId', 0] } } }
       ];
-      
-      const buyers = await this.buyerModel.aggregate(pipeline, { allowDiskUse: true }).exec();
+
+      const buyers = await this.buyerModel.aggregate(pipeline).option({ allowDiskUse: true }).exec();
       const totalBuyersPipeline = [
         { $match: searchQuery },
         { $addFields: { buyerIdStr: { $toString: '$_id' } } },
@@ -357,7 +357,7 @@ export class BuyersService {
         },
         { $match: { filteredDealsCount: { $gt: 0 } } }
       ];
-      const totalBuyers = await this.buyerModel.aggregate(totalBuyersPipeline, { allowDiskUse: true }).count('count').exec();
+      const totalBuyers = await this.buyerModel.aggregate(totalBuyersPipeline).option({ allowDiskUse: true }).count('count').exec();
       const totalCount = totalBuyers.length > 0 ? totalBuyers[0].count : 0;
       
       return {
@@ -425,8 +425,8 @@ export class BuyersService {
           }
         }
       ];
-      
-      const buyers = await this.buyerModel.aggregate(pipeline, { allowDiskUse: true }).exec();
+
+      const buyers = await this.buyerModel.aggregate(pipeline).option({ allowDiskUse: true }).exec();
       const totalBuyers = await this.buyerModel.countDocuments(searchQuery).exec();
       
       return {
