@@ -1175,25 +1175,45 @@ export class DealsService {
         $addFields: {
           industryMatch: 10,
           geographyMatch: 10,
-          // UPDATED: Revenue match - only check if deal revenue is <= buyer's max (ignore min)
+          // Revenue match - deal revenue must be within buyer's min-max range
           revenueMatch: {
             $cond: [
               {
-                $or: [
-                  { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
-                  { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
+                $and: [
+                  {
+                    $or: [
+                      { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
+                      { $gte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMin", 0] }] }
+                    ]
+                  },
+                  {
+                    $or: [
+                      { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
+                      { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
+                    ]
+                  }
                 ]
               },
               8, 0
             ]
           },
-          // UPDATED: EBITDA match - only check if deal EBITDA is <= buyer's max (ignore min)
+          // EBITDA match - deal EBITDA must be within buyer's min-max range
           ebitdaMatch: {
             $cond: [
               {
-                $or: [
-                  { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
-                  { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
+                $and: [
+                  {
+                    $or: [
+                      { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
+                      { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMin", 0] }] }
+                    ]
+                  },
+                  {
+                    $or: [
+                      { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
+                      { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
+                    ]
+                  }
                 ]
               },
               8, 0
