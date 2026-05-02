@@ -1,5 +1,7 @@
-import { IsEmail, IsNotEmpty, MinLength, IsString, IsOptional } from "class-validator"
+import { IsEmail, IsNotEmpty, MinLength, IsString, IsOptional, Matches, IsBoolean } from "class-validator"
 import { ApiProperty } from "@nestjs/swagger"
+
+const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).+$/
 
 export class CreateBuyerDto {
   @ApiProperty({ example: "John Doe", description: "Full name of the buyer" })
@@ -16,9 +18,12 @@ export class CreateBuyerDto {
   @IsString()
   phone: string;
 
-  @ApiProperty({ example: "password123", description: "Password with minimum length of 6 characters" })
+  @ApiProperty({ example: "StrongPass123!", description: "Password must be at least 8 characters and include uppercase, lowercase, number, and special character" })
   @IsNotEmpty()
-  @MinLength(6)
+  @MinLength(8)
+  @Matches(STRONG_PASSWORD_REGEX, {
+    message: "Password must include uppercase, lowercase, number, and special character",
+  })
   password: string
 
   @ApiProperty({ example: "Acme Inc", description: "Company name of the buyer" })
@@ -34,4 +39,20 @@ export class CreateBuyerDto {
   @IsString()
   @IsOptional()
   referralSource?: string
+
+  @ApiProperty({ example: true, description: "Whether the buyer opted in to receive SMS messages" })
+  @IsBoolean()
+  @IsOptional()
+  signUpForSms?: boolean
+
+  @ApiProperty({
+    description: "Buyer email preferences",
+    required: false,
+    example: { receiveDealEmails: true },
+  })
+  @IsOptional()
+  preferences?: {
+    receiveDealEmails?: boolean
+  }
 }
+

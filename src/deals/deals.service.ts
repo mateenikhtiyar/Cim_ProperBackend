@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from "@nestjs/common"
+import { ForbiddenException, Injectable, Inject, forwardRef, NotFoundException, BadRequestException, InternalServerErrorException, Logger } from "@nestjs/common"
 import { Deal, DealDocumentType as DealDocument, DealStatus } from "./schemas/deal.schema"
 import { CreateDealDto } from "./dto/create-deal.dto"
 import { UpdateDealDto } from "./dto/update-deal.dto"
@@ -6,20 +6,28 @@ import { Buyer } from '../buyers/schemas/buyer.schema';
 import { Seller } from '../sellers/schemas/seller.schema';
 import * as fs from "fs"
 import * as path from 'path';
-import mongoose, { Model, Types } from 'mongoose';
+import mongoose, { ClientSession, Model, Types } from 'mongoose';
 import { InjectModel } from "@nestjs/mongoose"
-import { expandCountryOrRegion } from '../common/geography-hierarchy';
+import { expandCountryOrRegion, findMatchingGeographies } from '../common/geography-hierarchy';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsOptional } from 'class-validator';
 import { MailService } from '../mail/mail.service';
 import { genericEmailTemplate, emailButton } from '../mail/generic-email.template';
 import { ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
+import { getAdminNotificationEmail } from '../common/admin-notification-email';
+import { getFrontendUrl } from '../common/frontend-url';
+import { getBackendUrl } from '../common/backend-url';
+import { DealActionToken, DealActionTokenDocument } from './schemas/deal-action-token.schema';
+import { cached, cacheInvalidate } from '../common/memory-cache';
+import { TeamMember, TeamMemberDocument } from "../team/schemas/team-member.schema";
+import * as crypto from 'crypto';
 
 
 interface DocumentInfo {
   filename: string
   originalName: string
-  path: string
+  path?: string
+  base64Content?: string
   size: number
   mimetype: string
   uploadedAt: Date
@@ -33,17 +41,496 @@ interface BuyerStatus {
   lastInteraction?: Date;
   totalInteractions?: number;
   interactions?: any[];
+  flaggedInactive?: boolean;
+  flaggedInactiveAt?: Date | string | null;
+  flaggedInactiveBy?: string | null;
 }
+
+interface BuyerEmailRecipient {
+  email: string;
+  fullName: string;
+}
+
+const escapeRegexInput = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const getFirstName = (fullName?: string | null): string => {
+  const trimmed = fullName?.trim();
+  if (!trimmed) return "User";
+  return trimmed.split(/\s+/)[0] || "User";
+};
+const escapeHtml = (value?: string | null): string =>
+  String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 @Injectable()
 export class DealsService {
+  private readonly logger = new Logger(DealsService.name);
+
+  // Email-action token signatures rely on JWT_SECRET. We refuse to operate
+  // with the legacy 'fallback-secret' in production: a known constant secret
+  // would let anyone forge HMAC signatures and mint valid action tokens.
+  // In non-production environments we fall back with a loud warning so local
+  // dev still works, but production must always have a real secret set.
+  private static cachedHmacSecret: string | null = null;
+  private getHmacSecret(): string {
+    if (DealsService.cachedHmacSecret) return DealsService.cachedHmacSecret;
+    const configured = process.env.JWT_SECRET;
+    if (configured && configured.length >= 16) {
+      DealsService.cachedHmacSecret = configured;
+      return configured;
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new InternalServerErrorException('Server misconfigured: JWT_SECRET is missing or too short.');
+    }
+    if (!configured) {
+      this.logger.warn('JWT_SECRET is not set. Using insecure fallback for email-action tokens. SET JWT_SECRET BEFORE DEPLOYING.');
+    } else {
+      this.logger.warn('JWT_SECRET is shorter than 16 characters. Using as-is in dev only. SET A STRONG SECRET BEFORE DEPLOYING.');
+    }
+    const dev = configured || 'fallback-secret';
+    DealsService.cachedHmacSecret = dev;
+    return dev;
+  }
+
+  private formatError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.stack || error.message;
+    }
+    return String(error);
+  }
+
+  private extractBuyerIdsForCountSync(deal: DealDocument): string[] {
+    const targeted = (deal.targetedBuyers || []).map((id) => id.toString());
+    const invitationIds = deal.invitationStatus instanceof Map
+      ? Array.from(deal.invitationStatus.keys())
+      : Object.keys((deal.invitationStatus as Record<string, unknown>) || {});
+    return Array.from(new Set([...targeted, ...invitationIds].filter(Boolean)));
+  }
+
+  private async syncBuyerDealCounts(buyerIds: string[], session?: ClientSession): Promise<void> {
+    if (buyerIds.length === 0) {
+      return;
+    }
+
+    for (const buyerId of buyerIds) {
+      const deals = await this.dealModel
+        .find(
+          { targetedBuyers: buyerId, status: { $ne: DealStatus.COMPLETED } },
+          { invitationStatus: 1 },
+        )
+        .session(session ?? null)
+        .lean()
+        .exec();
+
+      let activeCount = 0;
+      let pendingCount = 0;
+      let rejectedCount = 0;
+
+      for (const deal of deals) {
+        const invitationStatus = (deal as any).invitationStatus || {};
+        const buyerStatus = invitationStatus instanceof Map
+          ? invitationStatus.get(buyerId)
+          : invitationStatus[buyerId];
+
+        if (!buyerStatus?.response) {
+          continue;
+        }
+
+        if (buyerStatus.response === "accepted") activeCount += 1;
+        else if (buyerStatus.response === "pending") pendingCount += 1;
+        else if (buyerStatus.response === "rejected") rejectedCount += 1;
+      }
+
+      await this.buyerModel
+        .updateOne(
+          { _id: buyerId },
+          {
+            $set: {
+              activeDealsCount: activeCount,
+              pendingDealsCount: pendingCount,
+              rejectedDealsCount: rejectedCount,
+            },
+          },
+        )
+        .session(session ?? null)
+        .exec();
+    }
+  }
+
+  private async syncBuyerDealCountsForDeal(deal: DealDocument, session?: ClientSession): Promise<void> {
+    const buyerIds = this.extractBuyerIdsForCountSync(deal);
+    await this.syncBuyerDealCounts(buyerIds, session);
+  }
+
+  private async buyerAllowsFeeAboveAmplify(buyerId: string): Promise<boolean> {
+    const companyProfileModel = this.dealModel.db.model('CompanyProfile');
+    const profile = await companyProfileModel
+      .findOne({ buyer: buyerId }, { preferences: 1 })
+      .lean()
+      .exec() as any;
+    return profile?.preferences?.allowBuyerLikeDeals === true;
+  }
+
+  private async filterFeeEligibleBuyerIds(buyerIds: string[]): Promise<string[]> {
+    if (buyerIds.length === 0) return [];
+    const companyProfileModel = this.dealModel.db.model('CompanyProfile');
+    const profiles = await companyProfileModel
+      .find(
+        {
+          buyer: { $in: buyerIds },
+          "preferences.allowBuyerLikeDeals": true,
+        },
+        { buyer: 1 },
+      )
+      .lean()
+      .exec() as any[];
+    const allowedSet = new Set(profiles.map((p) => String(p.buyer)));
+    return buyerIds.filter((id) => allowedSet.has(String(id)));
+  }
+
+  private getDealIndustries(deal: Partial<DealDocument>): string[] {
+    const sectors = Array.isArray((deal as any).industrySectors)
+      ? ((deal as any).industrySectors as string[]).filter(Boolean)
+      : [];
+    if (sectors.length > 0) {
+      return sectors;
+    }
+    if ((deal as any).industrySector) {
+      return [String((deal as any).industrySector)];
+    }
+    return [];
+  }
+
   constructor(
     @InjectModel(Deal.name) private dealModel: Model<DealDocument>,
     @InjectModel('Buyer') private buyerModel: Model<Buyer>,
     @InjectModel('Seller') private sellerModel: Model<Seller>,
-    private mailService: MailService,
+    @InjectModel(TeamMember.name) private teamMemberModel: Model<TeamMemberDocument>,
+    @InjectModel(DealActionToken.name) private dealActionTokenModel: Model<DealActionTokenDocument>,
+    @Inject(forwardRef(() => MailService)) private mailService: MailService,
   ) { }
 
+  private async getBuyerEmailRecipients(
+    buyer: { _id?: unknown; email?: string; fullName?: string },
+  ): Promise<BuyerEmailRecipient[]> {
+    const ownerId = buyer?._id ? String(buyer._id) : "";
+    if (!ownerId) return [];
+
+    const buyerRecord = await this.buyerModel.findById(ownerId, { preferences: 1, email: 1, fullName: 1 }).lean().exec() as any;
+    const allowOwnerDealEmails = buyerRecord?.preferences?.receiveDealEmails !== false;
+
+    const activeMembers = await this.teamMemberModel
+      .find(
+        {
+          ownerId,
+          ownerType: "buyer",
+          isActive: true,
+          permissions: "emails",
+        },
+        { email: 1, fullName: 1, permissions: 1 },
+      )
+      .lean()
+      .exec();
+
+    const recipients: BuyerEmailRecipient[] = [];
+
+    if (allowOwnerDealEmails && buyer.email && buyer.email.trim().length > 0) {
+      recipients.push({
+        email: buyer.email.trim().toLowerCase(),
+        fullName: (buyer.fullName || "").trim() || "User",
+      });
+    }
+
+    const normalizedTeamRecipients = activeMembers
+      .filter((member) => typeof member?.email === "string" && member.email.trim().length > 0)
+      .map((member) => ({
+        email: member.email.trim().toLowerCase(),
+        fullName: (member.fullName || "").trim() || "Team Member",
+      }));
+
+    recipients.push(...normalizedTeamRecipients);
+
+    return Array.from(new Map(recipients.map((recipient) => [recipient.email, recipient])).values());
+  }
+
+
+  /**
+   * Build the recipient list for seller-targeted deal emails. Mirrors
+   * `getBuyerEmailRecipients` on the buyer side:
+   *   1. Seller owner, gated by their `preferences.receiveDealEmails` toggle.
+   *   2. Seller team members with `permissions: "emails"` and `isActive: true`.
+   * Recipients are deduped by email address.
+   */
+  private async getSellerEmailRecipients(
+    seller: { _id?: unknown; email?: string | null; fullName?: string; preferences?: { receiveDealEmails?: boolean } } | any,
+  ): Promise<BuyerEmailRecipient[]> {
+    if (!seller) return [];
+    const ownerId = seller._id ? String(seller._id) : '';
+
+    const ownerEmail =
+      typeof seller.email === 'string' && seller.email.trim().length > 0
+        ? seller.email.trim().toLowerCase()
+        : '';
+    const ownerName = (seller.fullName || '').trim() || 'User';
+
+    if (!ownerId) {
+      if (seller?.preferences?.receiveDealEmails === false) return [];
+      return ownerEmail ? [{ email: ownerEmail, fullName: ownerName }] : [];
+    }
+
+    const sellerRecord = (await this.sellerModel
+      .findById(ownerId, { preferences: 1, email: 1, fullName: 1 })
+      .lean()
+      .exec()) as any;
+    const allowOwnerDealEmails =
+      sellerRecord?.preferences?.receiveDealEmails !== false;
+
+    const activeMembers = await this.teamMemberModel
+      .find(
+        {
+          ownerId,
+          ownerType: 'seller',
+          isActive: true,
+          permissions: 'emails',
+        },
+        { email: 1, fullName: 1, permissions: 1 },
+      )
+      .lean()
+      .exec();
+
+    const recipients: BuyerEmailRecipient[] = [];
+
+    if (allowOwnerDealEmails && ownerEmail) {
+      recipients.push({ email: ownerEmail, fullName: ownerName });
+    }
+
+    const normalizedTeamRecipients = activeMembers
+      .filter((member) => typeof member?.email === 'string' && member.email.trim().length > 0)
+      .map((member) => ({
+        email: member.email.trim().toLowerCase(),
+        fullName: (member.fullName || '').trim() || 'Team Member',
+      }));
+
+    recipients.push(...normalizedTeamRecipients);
+
+    return Array.from(new Map(recipients.map((recipient) => [recipient.email, recipient])).values());
+  }
+
+  /**
+   * Send a deal-related email to the seller (advisor) and any seller team
+   * members with the `emails` permission turned on. Honors the seller's
+   * `preferences.receiveDealEmails` toggle on the owner row.
+   *
+   * Pass the *inner* HTML content (no `genericEmailTemplate` wrapper) so
+   * each recipient gets a body addressed to them by name.
+   */
+  private async sendSellerDealEmail(
+    seller:
+      | {
+          _id?: unknown;
+          email?: string | null;
+          fullName?: string;
+          preferences?: { receiveDealEmails?: boolean };
+        }
+      | any
+      | null,
+    subject: string,
+    innerContent: string,
+    attachments: any[],
+    relatedDealId?: string,
+    bannerTitle?: string,
+  ): Promise<void> {
+    const recipients = await this.getSellerEmailRecipients(seller);
+    if (recipients.length === 0) {
+      if (seller?.email) {
+        this.logger.log(
+          `Skipping seller deal email to ${seller.email} (no eligible recipients)`,
+        );
+      }
+      return;
+    }
+
+    const title = bannerTitle ?? subject;
+    await Promise.allSettled(
+      recipients.map((recipient) => {
+        const htmlBody = genericEmailTemplate(
+          title,
+          getFirstName(recipient.fullName),
+          innerContent,
+        );
+        return this.mailService.sendEmailWithLogging(
+          recipient.email,
+          'seller',
+          subject,
+          htmlBody,
+          attachments,
+          relatedDealId,
+        );
+      }),
+    );
+  }
+
+  /** Invalidate all admin caches after any deal/buyer/seller mutation */
+  private invalidateAdminCaches(): void {
+    cacheInvalidate('admin:', true);
+  }
+
+  /**
+   * Stateless HMAC-signed token used by the public NDA download link in
+   * introduction/invitation emails. Token format: `<payload>.<signature>`
+   * where payload is base64url JSON of `{ dealId, exp }` and signature is an
+   * HMAC-SHA256 over the payload using JWT_SECRET. No DB write required.
+   */
+  createNdaDownloadToken(dealId: string, ttlMs: number = 90 * 24 * 60 * 60 * 1000): string {
+    const exp = Date.now() + ttlMs;
+    const payload = Buffer.from(JSON.stringify({ dealId, exp })).toString('base64url');
+    const signature = crypto
+      .createHmac('sha256', this.getHmacSecret())
+      .update(payload)
+      .digest('base64url');
+    return `${payload}.${signature}`;
+  }
+
+  /**
+   * Public URL the email recipient clicks to download the NDA. Hits the
+   * backend directly (the file is served from the deal document, not the
+   * frontend).
+   */
+  buildNdaDownloadUrl(dealId: string): string {
+    const token = this.createNdaDownloadToken(dealId);
+    return `${getBackendUrl()}/deals/nda/${token}`;
+  }
+
+  async getNdaForDownload(token: string): Promise<{ buffer: Buffer; filename: string; mimetype: string }> {
+    if (!token || typeof token !== 'string') {
+      throw new BadRequestException('Missing token');
+    }
+    const parts = token.split('.');
+    if (parts.length !== 2) {
+      throw new BadRequestException('Invalid token format');
+    }
+    const [payload, signature] = parts;
+    const expectedSignature = crypto
+      .createHmac('sha256', this.getHmacSecret())
+      .update(payload)
+      .digest('base64url');
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      throw new BadRequestException('Invalid token signature');
+    }
+    let parsed: { dealId?: string; exp?: number };
+    try {
+      parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    } catch {
+      throw new BadRequestException('Malformed token');
+    }
+    if (!parsed.dealId || typeof parsed.exp !== 'number') {
+      throw new BadRequestException('Malformed token');
+    }
+    if (parsed.exp < Date.now()) {
+      throw new BadRequestException('Token expired');
+    }
+    if (!Types.ObjectId.isValid(parsed.dealId)) {
+      throw new BadRequestException('Invalid deal id');
+    }
+    const deal = await this.dealModel.findById(parsed.dealId).exec();
+    if (!deal || !deal.ndaDocument || !deal.ndaDocument.base64Content) {
+      throw new NotFoundException('NDA not available for this deal');
+    }
+    return {
+      buffer: Buffer.from(deal.ndaDocument.base64Content, 'base64'),
+      filename: deal.ndaDocument.originalName || 'NDA',
+      mimetype: deal.ndaDocument.mimetype || 'application/octet-stream',
+    };
+  }
+
+  async createDealActionUrls(dealId: string, buyerId: string): Promise<{ activateUrl: string; passUrl: string }> {
+    let activateUrl = `${getFrontendUrl()}/buyer/deals?action=activate&dealId=${dealId}`;
+    let passUrl = `${getFrontendUrl()}/buyer/deals?action=pass&dealId=${dealId}`;
+
+    try {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const hmacSecret = this.getHmacSecret();
+      const signature = crypto.createHmac('sha256', hmacSecret)
+        .update(`${rawToken}:${dealId}:${buyerId}`)
+        .digest('hex');
+      await this.dealActionTokenModel.create({
+        token: rawToken,
+        signature,
+        dealId,
+        buyerId,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+      activateUrl = `${getFrontendUrl()}/deal-action/${rawToken}?action=activate`;
+      passUrl = `${getFrontendUrl()}/deal-action/${rawToken}?action=pass`;
+    } catch (tokenErr) {
+      this.logger.error(`Token creation failed for buyer ${buyerId} on deal ${dealId}: ${(tokenErr as Error).message}. Falling back to dashboard URL.`);
+    }
+
+    return { activateUrl, passUrl };
+  }
+
+  async createSellerActionUrls(dealId: string, sellerId: string): Promise<{ loiUrl: string; offMarketUrl: string }> {
+    let loiUrl = `${getFrontendUrl()}/seller/dashboard?dealId=${encodeURIComponent(dealId)}`;
+    let offMarketUrl = `${getFrontendUrl()}/seller/dashboard?dealId=${encodeURIComponent(dealId)}`;
+
+    try {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const signature = crypto
+        .createHmac('sha256', this.getHmacSecret())
+        .update(`${rawToken}:${dealId}:${sellerId}`)
+        .digest('hex');
+
+      await this.dealActionTokenModel.create({
+        token: rawToken,
+        signature,
+        dealId,
+        buyerId: null,
+        sellerId,
+        recipientRole: 'seller',
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+
+      loiUrl = `${getFrontendUrl()}/seller-action/${rawToken}?action=loi`;
+      offMarketUrl = `${getFrontendUrl()}/seller-action/${rawToken}?action=off-market`;
+    } catch (tokenErr) {
+      this.logger.error(`Seller token creation failed for seller ${sellerId} on deal ${dealId}: ${(tokenErr as Error).message}. Falling back to dashboard URL.`);
+    }
+
+    return { loiUrl, offMarketUrl };
+  }
+
+  async createSellerBuyerFlagUrl(dealId: string, sellerId: string, buyerId: string): Promise<string> {
+    let flagUrl = `${getFrontendUrl()}/seller/dashboard?dealId=${encodeURIComponent(dealId)}&buyerId=${encodeURIComponent(buyerId)}`;
+
+    try {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const signature = crypto
+        .createHmac('sha256', this.getHmacSecret())
+        .update(`${rawToken}:${dealId}:${sellerId}:${buyerId}`)
+        .digest('hex');
+
+      await this.dealActionTokenModel.create({
+        token: rawToken,
+        signature,
+        dealId,
+        buyerId,
+        sellerId,
+        recipientRole: 'seller',
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+
+      flagUrl = `${getFrontendUrl()}/seller-action/${rawToken}?action=flag-inactive`;
+    } catch (tokenErr) {
+      this.logger.error(`Seller buyer flag token creation failed for seller ${sellerId}, buyer ${buyerId}, deal ${dealId}: ${(tokenErr as Error).message}. Falling back to dashboard URL.`);
+    }
+
+    return flagUrl;
+  }
 
   async create(createDealDto: CreateDealDto): Promise<Deal> {
     try {
@@ -55,28 +542,27 @@ export class DealsService {
       }
       const createdDeal = new this.dealModel(dealData)
       const savedDeal = await createdDeal.save()
+      this.invalidateAdminCaches();
 
       // Send email to seller
       const seller = await this.sellerModel.findById(savedDeal.seller).exec();
       if (seller) {
         const subject = "Thank you for adding a new deal to CIM Amplify!";
         const emailContent = `
-          <p>Dear ${seller.fullName},</p>
           <p>We are truly excited to help you find a great buyer for your deal.</p>
-          <p>We will let you know via email when your selected buyers change from pending to active to pass. You can also check your dashboard at any time to see buyer activity.</p>
-          ${emailButton('Go to Dashboard', `${process.env.FRONTEND_URL}/seller/dashboard`)}
-          <p>Please help us to keep the platform up to date by clicking the <b>Off Market button</b> when the deal is sold or paused. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
+          <p>We will let you know via email when your selected buyers are interested and want more information. You can also check your dashboard at any time to see buyer activity.</p>
+          ${emailButton('Go to Dashboard', `${getFrontendUrl()}/seller/dashboard`)}
+          <p>Please help us to keep the platform up to date by clicking the <b>Off Market button</b> when the deal is sold or paused When the deal is <b> Under LOI button</b>. If sold to one of our introduced buyers we will be in touch to arrange payment of your reward!</p>
           <p>Finally, If your deal did not fetch any buyers, we are always adding new buyers that may match in the future. To watch for new matches simply click Activity on the deal card and then click on the <b>Invite More Buyers</b> button.</p>
         `;
-        const emailBody = genericEmailTemplate('CIM Amplify', seller.fullName, emailContent);
 
-        await this.mailService.sendEmailWithLogging(
-          seller.email,
-          'seller',
+        await this.sendSellerDealEmail(
+          seller,
           subject,
-          emailBody, // Use the formatted email body
+          emailContent,
           [ILLUSTRATION_ATTACHMENT], // attachments
           (savedDeal._id as Types.ObjectId).toString(), // relatedDealId
+          'CIM Amplify',
         );
       }
 
@@ -86,16 +572,20 @@ export class DealsService {
       const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(savedDeal.financialDetails?.trailingRevenueAmount || 0);
       const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(savedDeal.financialDetails?.trailingEBITDAAmount || 0);
       const sellerNameForOwner = seller?.fullName || 'Not provided';
+      const sellerCompanyForOwner = seller?.companyName || 'Not provided';
       const sellerEmailForOwner = seller?.email || 'Not provided';
       const ownerHtmlBody = genericEmailTemplate(ownerHeading, 'John', `
         <p><b>Seller Name</b>: ${sellerNameForOwner}</p>
+        <p><b>Company Name</b>: ${sellerCompanyForOwner}</p>
         <p><b>Seller Email</b>: ${sellerEmailForOwner}</p>
         <p><b>Description</b>: ${savedDeal.companyDescription}</p>
         <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
         <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
+        <p><b>Reward Level</b>: ${savedDeal.rewardLevel || 'Not set'}</p>
+        <p><b>Marketplace</b>: ${savedDeal.isPublic ? 'Yes' : 'No'}</p>
       `);
       await this.mailService.sendEmailWithLogging(
-        'canotifications@amp-ven.com',
+        getAdminNotificationEmail(),
         'admin',
         ownerSubject,
         ownerHtmlBody,
@@ -118,7 +608,7 @@ export class DealsService {
     const query: any = {};
 
     if (filters.search) {
-      const searchRegex = new RegExp(filters.search, 'i');
+      const searchRegex = new RegExp(escapeRegexInput(filters.search), 'i');
       query.$or = [
         { title: searchRegex },
         { companyDescription: searchRegex },
@@ -168,36 +658,63 @@ export class DealsService {
       query.isPublic = filters.isPublic === 'true';
     }
 
-    const deals = await this.dealModel.find(query).skip(skip).limit(limit).exec();
-    const totalDeals = await this.dealModel.countDocuments(query).exec();
+    const pipeline: any[] = [
+      { $match: query },
+      {
+        $facet: {
+          data: [
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $addFields: {
+                invitationStatusArray: {
+                  $objectToArray: { $ifNull: ["$invitationStatus", {}] },
+                },
+              },
+            },
+            {
+              $addFields: {
+                buyersByStatus: {
+                  active: {
+                    $size: {
+                      $filter: {
+                        input: "$invitationStatusArray",
+                        as: "inv",
+                        cond: { $eq: ["$$inv.v.response", "accepted"] },
+                      },
+                    },
+                  },
+                  pending: {
+                    $size: {
+                      $filter: {
+                        input: "$invitationStatusArray",
+                        as: "inv",
+                        cond: { $eq: ["$$inv.v.response", "pending"] },
+                      },
+                    },
+                  },
+                  rejected: {
+                    $size: {
+                      $filter: {
+                        input: "$invitationStatusArray",
+                        as: "inv",
+                        cond: { $eq: ["$$inv.v.response", "rejected"] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            { $project: { invitationStatusArray: 0 } },
+          ],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ];
 
-    // Add buyer status counts for each deal
-    const dealsWithCounts = await Promise.all(deals.map(async (deal) => {
-      try {
-        // Get the buyer status summary for this deal
-        const statusSummary = await this.getDealWithBuyerStatusSummary((deal as any)._id.toString());
-
-        // Add buyer counts to the deal object
-        return {
-          ...deal.toObject(),
-          buyersByStatus: {
-            active: statusSummary.summary.totalActive || 0,
-            pending: statusSummary.summary.totalPending || 0,
-            rejected: statusSummary.summary.totalRejected || 0,
-          }
-        };
-      } catch (error) {
-        // If there's an error getting status summary, return deal with zero counts
-        return {
-          ...deal.toObject(),
-          buyersByStatus: {
-            active: 0,
-            pending: 0,
-            rejected: 0,
-          }
-        };
-      }
-    }));
+    const [result] = await this.dealModel.aggregate(pipeline).exec();
+    const dealsWithCounts = result?.data || [];
+    const totalDeals = result?.totalCount?.[0]?.count || 0;
 
     return {
       data: dealsWithCounts,
@@ -249,6 +766,118 @@ export class DealsService {
       .exec()
   }
 
+  async findPublicDealsPaginated(
+    buyerId: string,
+    page = 1,
+    limit = 20,
+    location?: string,
+    industry?: string,
+  ): Promise<{ data: any[]; total: number; page: number; lastPage: number }> {
+    const skip = (page - 1) * limit;
+    const buyerObjectId = mongoose.isValidObjectId(buyerId) ? new Types.ObjectId(buyerId) : null;
+    const matchStage: Record<string, any> = {
+      isPublic: true,
+      status: { $ne: DealStatus.COMPLETED },
+      hiddenByBuyers: { $ne: buyerObjectId || buyerId },
+    };
+
+    if (location?.trim()) {
+      const matchingGeos = findMatchingGeographies(location.trim());
+      if (matchingGeos.length > 0) {
+        // Match deals whose geographySelection is in the expanded set OR contains the search term
+        const locationFilter = {
+          $or: [
+            { geographySelection: { $in: matchingGeos } },
+            { geographySelection: { $regex: escapeRegexInput(location.trim()), $options: "i" } },
+          ],
+        };
+        matchStage.$and = matchStage.$and || [];
+        matchStage.$and.push(locationFilter);
+      } else {
+        matchStage.geographySelection = {
+          $regex: escapeRegexInput(location.trim()),
+          $options: "i",
+        };
+      }
+    }
+
+    if (industry?.trim()) {
+      const industryRegex = {
+        $regex: escapeRegexInput(industry.trim()),
+        $options: "i",
+      };
+      const industryFilter = {
+        $or: [
+          { industrySector: industryRegex },
+          { industrySectors: industryRegex },
+        ],
+      };
+      matchStage.$and = matchStage.$and || [];
+      matchStage.$and.push(industryFilter);
+    }
+
+    const pipeline: any[] = [
+      {
+        $match: matchStage,
+      },
+      {
+        $addFields: {
+          buyerInvitation: {
+            $getField: {
+              field: buyerId,
+              input: { $ifNull: ["$invitationStatus", {}] },
+            },
+          },
+          currentBuyerRequested: {
+            $in: [buyerObjectId || buyerId, { $ifNull: ["$targetedBuyers", []] }],
+          },
+        },
+      },
+      {
+        $match: {
+          $or: [
+            { "buyerInvitation.response": { $exists: false } },
+            { "buyerInvitation.response": null },
+            { "buyerInvitation.response": { $nin: ["pending", "accepted", "rejected"] } },
+          ],
+        },
+      },
+      { $sort: { createdAt: -1 } },
+      {
+        $facet: {
+          data: [
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $addFields: {
+                currentBuyerStatus: {
+                  $ifNull: ["$buyerInvitation.response", "none"],
+                },
+              },
+            },
+            {
+              $project: {
+                buyerInvitation: 0,
+              },
+            },
+          ],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ];
+
+    const [result] = await this.dealModel.aggregate(pipeline).exec();
+    const data = result?.data || [];
+    const total = result?.totalCount?.[0]?.count || 0;
+
+    return {
+      data,
+      total,
+      page,
+      lastPage: Math.ceil(total / limit),
+    };
+  }
+
   async findDealsForBuyer(buyerId: string): Promise<Deal[]> {
     return this.dealModel
       .find({
@@ -269,7 +898,6 @@ export class DealsService {
     if (!deal.isPublic) {
       throw new ForbiddenException('This deal is not listed in the marketplace');
     }
-
     // Add buyer to targetedBuyers so it shows in seller dashboard
     if (!deal.targetedBuyers.map(String).includes(buyerId)) {
       deal.targetedBuyers.push(buyerId);
@@ -312,6 +940,7 @@ export class DealsService {
 
     deal.timeline.updatedAt = new Date();
     await deal.save();
+    await this.syncBuyerDealCountsForDeal(deal);
 
     // Send introduction emails to both advisor and buyer (same as pending to active)
     try {
@@ -321,10 +950,10 @@ export class DealsService {
 
       if (seller && buyer) {
         // Email to Advisor (Seller)
-        const advisorSubject = `CIM AMPLIFY INTRODUCTION FOR ${deal.title}`;
-        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+        const advisorSubject = `${buyer.companyName} is interested in ${deal.title} on CIM Amplify`;
+        const advisorContent = `
           <p>${buyer.fullName} at ${buyer.companyName} is interested in learning more about ${deal.title}.  If you attached an NDA to this deal it has already been sent to the buyer for execution.</p>
-          <p>Here are the buyer's details:</p>
+          <p>Here are the buyer's details, please reach out to them right away:</p>
           <p>
             ${buyer.fullName}<br>
             ${buyer.companyName}<br>
@@ -332,13 +961,12 @@ export class DealsService {
             ${buyer.phone}<br>
             ${(companyProfile as any)?.website || ''}
           </p>
-        `);
+        `;
 
-        await this.mailService.sendEmailWithLogging(
-          seller.email,
-          'seller',
+        await this.sendSellerDealEmail(
+          seller,
           advisorSubject,
-          advisorHtmlBody,
+          advisorContent,
           [ILLUSTRATION_ATTACHMENT],
           (deal._id as Types.ObjectId).toString(),
         );
@@ -347,7 +975,8 @@ export class DealsService {
         const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${deal.title}`;
         const hasNda = deal.ndaDocument && deal.ndaDocument.base64Content;
         const ndaFileName = hasNda && deal.ndaDocument ? deal.ndaDocument.originalName : '';
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+        const ndaDownloadUrl = hasNda ? this.buildNdaDownloadUrl((deal._id as Types.ObjectId).toString()) : '';
+        const buyerEmailContent = `
           <p>Thank you for accepting an introduction to <strong>${deal.title}</strong>. We've notified the Advisor who will reach out to you directly:</p>
           <p style="margin: 16px 0; padding: 12px; background-color: #f5f5f5; border-radius: 8px;">
             <strong>${seller.fullName}</strong><br>
@@ -373,10 +1002,11 @@ export class DealsService {
                         </td>
                         <td>
                           <strong style="color: #333; font-size: 14px;">${ndaFileName}</strong><br>
-                          <span style="color: #666; font-size: 12px;">Please download the attachment</span>
+                          <span style="color: #666; font-size: 12px;">Click below to download</span>
                         </td>
                       </tr>
                     </table>
+                    <a href="${ndaDownloadUrl}" target="_blank" style="display: inline-block; margin-top: 12px; padding: 10px 20px; background-color: #3aafa9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 13px;">Download NDA</a>
                     <p style="margin: 12px 0 0 0; color: #333; font-size: 13px;">
                       <strong>Next steps:</strong> Fill out and sign the NDA, then send it directly to the Advisor at
                       <a href="mailto:${seller.email}" style="color: #3aafa9;">${seller.email}</a>
@@ -388,9 +1018,9 @@ export class DealsService {
             : ''
           }
           <p>To review this and other deals please go to your dashboard.</p>
-          ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
+          ${emailButton('View Dashboard', `${getFrontendUrl()}/buyer/deals`)}
           <p>If you don't hear back within 2 days, reply to this email and our team will assist.</p>
-        `);
+        `;
 
         // Build attachments array - include NDA if available
         const buyerAttachments: any[] = [ILLUSTRATION_ATTACHMENT];
@@ -403,17 +1033,156 @@ export class DealsService {
           });
         }
 
-        await this.mailService.sendEmailWithLogging(
-          buyer.email,
-          'buyer',
-          buyerSubject,
-          buyerHtmlBody,
-          buyerAttachments,
-          (deal._id as Types.ObjectId).toString(),
-        );
+        const recipients = await this.getBuyerEmailRecipients(buyer as any);
+        if (recipients.length === 0) {
+          this.logger.warn(`No intro recipients resolved for buyer ${buyerId} on deal ${(deal._id as Types.ObjectId).toString()}`);
+        } else {
+          await Promise.allSettled(
+            recipients.map((recipient) => {
+              const buyerHtmlBody = genericEmailTemplate(
+                buyerSubject,
+                getFirstName(recipient.fullName),
+                buyerEmailContent,
+              );
+
+              return this.mailService.sendEmailWithLogging(
+                recipient.email,
+                'buyer',
+                buyerSubject,
+                buyerHtmlBody,
+                buyerAttachments,
+                (deal._id as Types.ObjectId).toString(),
+              );
+            }),
+          );
+        }
+
+        const sendMarketplaceInviteEmail = false;
+        if (sendMarketplaceInviteEmail) {
+          const inviteSubject = `YOU ARE INVITED TO PARTICIPATE IN A ${deal.title} DEAL`;
+          const ownerEmail = (buyer.email || '').trim().toLowerCase();
+          const inviteRecipients = ownerEmail
+            ? Array.from(
+                new Map(
+                  [
+                    ...recipients,
+                    { email: ownerEmail, fullName: (buyer.fullName || '').trim() || 'User' },
+                  ].map((recipient) => [recipient.email, recipient]),
+                ).values(),
+              )
+            : recipients;
+
+          if (inviteRecipients.length === 0) {
+            this.logger.warn(`No invite recipients resolved for buyer ${buyerId} on deal ${(deal._id as Types.ObjectId).toString()}`);
+          } else {
+          let activateUrl = `${getFrontendUrl()}/buyer/deals?action=activate&dealId=${(deal._id as Types.ObjectId).toString()}`;
+          let passUrl = `${getFrontendUrl()}/buyer/deals?action=pass&dealId=${(deal._id as Types.ObjectId).toString()}`;
+
+          try {
+            const rawToken = crypto.randomBytes(32).toString('hex');
+            const hmacSecret = this.getHmacSecret();
+            const dealIdStr = (deal._id as Types.ObjectId).toString();
+            const signature = crypto.createHmac('sha256', hmacSecret)
+              .update(`${rawToken}:${dealIdStr}:${buyerId}`)
+              .digest('hex');
+            await this.dealActionTokenModel.create({
+              token: rawToken,
+              signature,
+              dealId: dealIdStr,
+              buyerId,
+              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            });
+            activateUrl = `${getFrontendUrl()}/deal-action/${rawToken}?action=activate`;
+            passUrl = `${getFrontendUrl()}/deal-action/${rawToken}?action=pass`;
+          } catch (tokenErr) {
+            this.logger.error(`Token creation failed for buyer ${buyerId} on deal ${(deal._id as Types.ObjectId).toString()}: ${(tokenErr as Error).message}. Falling back to dashboard URL.`);
+          }
+
+          const hasNda = deal.ndaDocument && deal.ndaDocument.base64Content;
+          const ndaFileName = hasNda && deal.ndaDocument ? deal.ndaDocument.originalName : '';
+          const ndaDownloadUrl = hasNda ? this.buildNdaDownloadUrl((deal._id as Types.ObjectId).toString()) : '';
+          const inviteEmailContent = `
+            <p><b>Details:</b> ${deal.companyDescription}</p>
+            <p><b>T12 Revenue</b>: ${deal.financialDetails?.trailingRevenueAmount ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails.trailingRevenueAmount) : '$0'}</p>
+            <p><b>T12 EBITDA</b>: ${deal.financialDetails?.trailingEBITDAAmount ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails.trailingEBITDAAmount) : '$0'}</p>
+
+            <!-- Action Buttons -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 24px 0;">
+              <tr>
+                <td align="center">
+                  <a href="${passUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #E35153; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Pass</a>
+                </td>
+              </tr>
+            </table>
+
+            <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard under Pending to see more details.</p>
+            <p>Please keep your dashboard up to date by responding to Pending deals promptly.</p>
+            ${emailButton('View Dashboard', `${getFrontendUrl()}/buyer/deals`)}
+          `;
+
+          const buyerAttachments: any[] = [ILLUSTRATION_ATTACHMENT];
+          if (hasNda && deal.ndaDocument) {
+            const ndaBuffer = Buffer.from(deal.ndaDocument.base64Content, 'base64');
+            buyerAttachments.push({
+              filename: deal.ndaDocument.originalName,
+              content: ndaBuffer,
+              contentType: deal.ndaDocument.mimetype,
+            });
+          }
+
+          await Promise.allSettled(
+            inviteRecipients.map((recipient) => {
+              const inviteHtmlBody = genericEmailTemplate(
+                inviteSubject,
+                getFirstName(recipient.fullName),
+                inviteEmailContent + (hasNda ? `
+                  <table width="100%" cellpadding="0" cellspacing="0" style="margin: 20px 0; border: 2px solid #3aafa9; border-radius: 8px; overflow: hidden;">
+                    <tr>
+                      <td style="background-color: #3aafa9; padding: 12px 16px;">
+                        <strong style="color: #ffffff; font-size: 14px;">📎 NDA DOCUMENT ATTACHED</strong>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="background-color: #e8f5f3; padding: 16px;">
+                        <table cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td style="padding-right: 12px;">
+                              <div style="width: 40px; height: 40px; background-color: #3aafa9; border-radius: 4px; text-align: center; line-height: 40px;">
+                                <span style="color: white; font-size: 18px;">📄</span>
+                              </div>
+                            </td>
+                            <td>
+                              <strong style="color: #333; font-size: 14px;">${ndaFileName}</strong><br>
+                              <span style="color: #666; font-size: 12px;">Click below to download</span>
+                            </td>
+                          </tr>
+                        </table>
+                        <a href="${ndaDownloadUrl}" target="_blank" style="display: inline-block; margin-top: 12px; padding: 10px 20px; background-color: #3aafa9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 13px;">Download NDA</a>
+                        <p style="margin: 12px 0 0 0; color: #333; font-size: 13px;">
+                          <strong>Next steps:</strong> Fill out and sign the NDA, then send it directly to the Advisor at
+                          <a href="mailto:${seller.email}" style="color: #3aafa9;">${seller.email}</a>
+                        </p>
+                      </td>
+                    </tr>
+                  </table>
+                ` : '')
+              );
+
+              return this.mailService.sendEmailWithLogging(
+                recipient.email,
+                'buyer',
+                inviteSubject,
+                inviteHtmlBody,
+                buyerAttachments,
+                (deal._id as Types.ObjectId).toString(),
+              );
+            }),
+          );
+          }
+        }
       }
     } catch (emailError) {
-      // Don't fail the operation if emails fail
+      this.logger.error(`Failed sending request-access emails for deal ${dealId}`, this.formatError(emailError));
     }
 
     return { message: 'Deal added to your Active deals!' };
@@ -438,6 +1207,7 @@ export class DealsService {
     }
 
     await deal.save();
+    await this.syncBuyerDealCountsForDeal(deal);
 
     return { message: 'Deal removed from your marketplace' };
   }
@@ -478,14 +1248,15 @@ export class DealsService {
 
     deal.timeline.updatedAt = new Date();
     await deal.save();
+    await this.syncBuyerDealCountsForDeal(deal);
 
     // Optionally notify buyer that they have been approved and can move to active
     const buyer = await this.buyerModel.findById(buyerId).exec();
     if (buyer) {
       const subject = `You have access to the Marketplace deal`;
-      const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+      const htmlBody = genericEmailTemplate(subject, getFirstName(buyer.fullName), `
         <p>Your access request for the Marketplace deal was approved. The deal is now available in your Pending tab. Click <strong>Move to Active</strong> to receive an introduction to the advisor.</p>
-        ${emailButton('View Pending Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
+        ${emailButton('View Pending Deals', `${getFrontendUrl()}/buyer/deals`)}
       `);
       await this.mailService.sendEmailWithLogging(
         buyer.email,
@@ -537,15 +1308,16 @@ export class DealsService {
     deal.interestedBuyers = deal.interestedBuyers.filter((id) => id.toString() !== buyerId);
     deal.timeline.updatedAt = new Date();
     await deal.save();
+    await this.syncBuyerDealCountsForDeal(deal);
 
     // Optional: notify buyer
     const buyer = await this.buyerModel.findById(buyerId).exec();
     if (buyer) {
       const subject = `Access request declined for Marketplace deal`;
-      const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+      const htmlBody = genericEmailTemplate(subject, getFirstName(buyer.fullName), `
         <p>Your request to access the marketplace deal has been declined by the advisor at this time.</p>
         <p>You can continue browsing the marketplace for other opportunities.</p>
-        ${emailButton('Browse Marketplace', `${process.env.FRONTEND_URL}/buyer/marketplace`)}
+        ${emailButton('Browse Marketplace', `${getFrontendUrl()}/buyer/marketplace`)}
       `);
       await this.mailService.sendEmailWithLogging(
         buyer.email,
@@ -576,12 +1348,14 @@ export class DealsService {
       throw new NotFoundException("Document not found");
     }
     const documentToRemove = deal.documents[documentIndex];
-    try {
-      if (fs.existsSync(documentToRemove.path)) {
-        fs.unlinkSync(documentToRemove.path);
+    if (documentToRemove.path) {
+      try {
+        if (fs.existsSync(documentToRemove.path)) {
+          fs.unlinkSync(documentToRemove.path);
+        }
+      } catch (error) {
+        this.logger.error("Error removing legacy disk file:", this.formatError(error));
       }
-    } catch (error) {
-      console.error("Error removing file:", error);
     }
     deal.documents.splice(documentIndex, 1);
     deal.timeline.updatedAt = new Date();
@@ -597,6 +1371,10 @@ export class DealsService {
     if (deal.seller.toString() !== userId && userRole !== 'admin') {
       throw new ForbiddenException("You don't have permission to update this deal");
     }
+    // CA 2.2: Deal title is immutable after creation (defense-in-depth alongside DTO whitelist)
+    if ((updateDealDto as any).title) {
+      throw new ForbiddenException("Deal title cannot be changed after creation");
+    }
     // If admin, allow marking as completed regardless of seller
     if (userRole === 'admin' && updateDealDto.status === DealStatus.COMPLETED) {
       deal.status = DealStatus.COMPLETED;
@@ -605,6 +1383,7 @@ export class DealsService {
       }
       deal.timeline.updatedAt = new Date();
       await deal.save();
+      await this.syncBuyerDealCountsForDeal(deal);
       return deal;
     }
     // Remove all debug logs
@@ -666,16 +1445,18 @@ export class DealsService {
                 metadata: { source: 'marketplace-optout' },
               });
               await tracking.save();
-            } catch { }
+            } catch (trackingError) {
+              this.logger.error(`Failed to track marketplace opt-out for buyer ${buyerId} on deal ${id}`, this.formatError(trackingError));
+            }
             // Email buyer
             try {
               const buyer = await this.buyerModel.findById(buyerId).exec();
               if (buyer) {
                 const subject = `${deal.title} is no longer listed in the marketplace`;
-                const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
+                const htmlBody = genericEmailTemplate(subject, getFirstName(buyer.fullName), `
                   <p>Your request to access <strong>${deal.title}</strong> is no longer available because the advisor removed the listing from the marketplace.</p>
                   <p>You can continue browsing the marketplace for other opportunities.</p>
-                  ${emailButton('Browse Marketplace', `${process.env.FRONTEND_URL}/buyer/marketplace`)}
+                  ${emailButton('Browse Marketplace', `${getFrontendUrl()}/buyer/marketplace`)}
                 `);
                 await this.mailService.sendEmailWithLogging(
                   buyer.email,
@@ -686,29 +1467,32 @@ export class DealsService {
                   (deal._id as Types.ObjectId).toString(),
                 );
               }
-            } catch { }
+            } catch (emailError) {
+              this.logger.error(`Failed to send marketplace opt-out email to buyer ${buyerId} for deal ${id}`, this.formatError(emailError));
+            }
           }
         }
       }
     }
-    // Handle NDA document update explicitly
-    if ('ndaDocument' in updateDealDto) {
-      if (updateDealDto.ndaDocument === null || updateDealDto.ndaDocument === undefined) {
-        // Remove NDA document if explicitly set to null/undefined
-        deal.ndaDocument = undefined;
-        deal.markModified('ndaDocument');
-      } else if (updateDealDto.ndaDocument) {
-        // Update NDA document with new data
-        deal.ndaDocument = {
-          originalName: updateDealDto.ndaDocument.originalName,
-          base64Content: updateDealDto.ndaDocument.base64Content,
-          mimetype: updateDealDto.ndaDocument.mimetype,
-          size: updateDealDto.ndaDocument.size,
-          uploadedAt: updateDealDto.ndaDocument.uploadedAt || new Date(),
-        };
-        deal.markModified('ndaDocument');
-      }
+    // Handle NDA document update explicitly.
+    // Only wipe NDA when the client sends an EXPLICIT null (intentional removal).
+    // undefined (key absent or class-transformer default) must never wipe existing data.
+    if (updateDealDto.ndaDocument === null) {
+      // Explicit removal requested by the client
+      deal.ndaDocument = undefined;
+      deal.markModified('ndaDocument');
+    } else if (updateDealDto.ndaDocument && typeof updateDealDto.ndaDocument === 'object') {
+      // New or preserved NDA data provided
+      deal.ndaDocument = {
+        originalName: updateDealDto.ndaDocument.originalName,
+        base64Content: updateDealDto.ndaDocument.base64Content,
+        mimetype: updateDealDto.ndaDocument.mimetype,
+        size: updateDealDto.ndaDocument.size,
+        uploadedAt: updateDealDto.ndaDocument.uploadedAt || new Date(),
+      };
+      deal.markModified('ndaDocument');
     }
+    // If ndaDocument is undefined (absent from payload), do nothing — preserve existing NDA
 
     // Only update provided fields, do not overwrite required fields with undefined
     for (const [key, value] of Object.entries(updateDataWithoutDocuments)) {
@@ -725,6 +1509,8 @@ export class DealsService {
       deal.rewardLevel = rewardLevelMap[deal.visibility] || 'Seed';
     }
     await deal.save();
+    await this.syncBuyerDealCountsForDeal(deal);
+    this.invalidateAdminCaches();
     const updatedDeal = await this.dealModel.findById(deal._id).exec() as DealDocument;
     if (!updatedDeal) {
       throw new NotFoundException(`Deal with ID ${deal._id} not found after update`);
@@ -752,16 +1538,23 @@ export class DealsService {
             fs.unlinkSync(doc.path)
           }
         } catch (error) {
-          console.error("Error removing document file:", error)
+          this.logger.error("Error removing document file:", this.formatError(error))
         }
       })
     }
 
     await this.dealModel.findByIdAndDelete(id).exec()
+    this.invalidateAdminCaches();
   }
 
   async getDealStatistics(sellerId: string): Promise<any> {
-    const deals = await this.dealModel.find({ seller: sellerId }).exec()
+    // TODO: replace with $group aggregation for O(1) memory regardless of deal count.
+    const deals = await this.dealModel
+      .find({ seller: sellerId })
+      .select('status interestedBuyers documents')
+      .limit(10000)
+      .lean()
+      .exec() as any[];
 
     const stats = {
       totalDeals: deals.length,
@@ -785,354 +1578,11 @@ export class DealsService {
       .exec()
   }
 
-  // async findMatchingBuyers(dealId: string): Promise<any[]> {
-  //   const deal = await this.findOne(dealId);
-  //   const companyProfileModel = this.dealModel.db.model('CompanyProfile');
-  //   const expandedGeos = expandCountryOrRegion(deal.geographySelection);
-  //   const { rewardLevel } = deal;
-  //   let extraMatchCondition: any = {};
-  //   if (rewardLevel === "Seed") {
-  //     extraMatchCondition = {
-  //       "preferences.doNotSendMarketedDeals": { $ne: true }
-  //     };
-  //   }
-  //   // Get only real buyer IDs from invitationStatus (Map or object)
-  //   const alreadyInvitedBuyerIds = deal.invitationStatus instanceof Map
-  //     ? Array.from(deal.invitationStatus.keys())
-  //     : Object.keys(deal.invitationStatus || {});
-  //   console.log('DEBUG: alreadyInvitedBuyerIds:', alreadyInvitedBuyerIds);
-  //   const companyProfiles = await companyProfileModel.find({}).lean();
-  //   console.log('DEBUG: CompanyProfile buyers:', companyProfiles.map(cp => cp.buyer));
-  //   const mandatoryQuery: any = {
-  //     "preferences.stopSendingDeals": { $ne: true },
-  //     "targetCriteria.countries": { $in: expandedGeos },
-  //     "targetCriteria.industrySectors": deal.industrySector,
-  //     ...extraMatchCondition,
-  //   };
-  //   const matchingProfiles = await companyProfileModel.aggregate([
-  //     { $match: mandatoryQuery },
-  //     ...(alreadyInvitedBuyerIds.length > 0
-  //       ? [
-  //           {
-  //             $addFields: {
-  //               buyerStr: { $toString: "$buyer" }
-  //             }
-  //           },
-  //           { $match: { buyerStr: { $nin: alreadyInvitedBuyerIds } } }
-  //         ]
-
-  //       : []),
-  //     {
-  //       $lookup: {
-  //         from: 'buyers',
-  //         localField: 'buyer',
-  //         foreignField: '_id',
-  //         as: 'buyerInfo',
-  //       },
-  //     },
-  //     { $unwind: '$buyerInfo' },
-  //     {
-  //       $addFields: {
-  //         industryMatch: 10,
-  //         geographyMatch: 10,
-  //         revenueMatch: {
-  //           $cond: [
-  //             {
-  //               $and: [
-  //                 {
-  //                   $or: [
-  //                     { $eq: [{ $ifNull: ["$targetCriteria.revenueMin", null] }, null] },
-  //                     { $gte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMin", 0] }] }
-  //                   ]
-  //                 },
-  //                 {
-  //                   $or: [
-  //                     { $eq: [{ $ifNull: ["$targetCriteria.revenueMax", null] }, null] },
-  //                     { $lte: [{ $ifNull: [deal.financialDetails?.trailingRevenueAmount || 0, 0] }, { $ifNull: ["$targetCriteria.revenueMax", Number.MAX_SAFE_INTEGER] }] }
-  //                   ]
-  //                 }
-  //               ]
-  //             },
-  //             8, 0
-  //           ]
-  //         },
-  //         ebitdaMatch: {
-  //           $cond: [
-  //             {
-  //               $and: [
-  //                 {
-  //                   $or: [
-  //                     { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", null] }, null] },
-  //                     {
-  //                       $cond: [
-  //                         { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMin", 0] }, 0] },
-  //                         { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, 0] },
-  //                         { $gte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMin", 0] }] }
-  //                       ]
-  //                     }
-  //                   ]
-  //                 },
-  //                 {
-  //                   $or: [
-  //                     { $eq: [{ $ifNull: ["$targetCriteria.ebitdaMax", null] }, null] },
-  //                     { $lte: [{ $ifNull: [deal.financialDetails?.trailingEBITDAAmount || 0, 0] }, { $ifNull: ["$targetCriteria.ebitdaMax", Number.MAX_SAFE_INTEGER] }] }
-  //                   ]
-  //                 }
-  //               ]
-  //             },
-  //             8, 0
-  //           ]
-  //         },
-  //         revenueGrowthMatch: {
-  //           $cond: [
-  //             {
-  //               $or: [
-  //                 { $eq: [{ $ifNull: ["$targetCriteria.revenueGrowth", null] }, null] },
-  //                 { $gte: [{ $ifNull: [deal.financialDetails?.avgRevenueGrowth || 0, 0] }, { $ifNull: ["$targetCriteria.revenueGrowth", 0] }] }
-  //               ]
-  //             },
-  //             5, 0
-  //           ]
-  //         },
-  //         yearsMatch: {
-  //           $cond: [
-  //             {
-  //               $or: [
-  //                 { $eq: [{ $ifNull: ["$targetCriteria.minYearsInBusiness", null] }, null] },
-  //                 { $gte: [deal.yearsInBusiness || 0, { $ifNull: ["$targetCriteria.minYearsInBusiness", 0] }] }
-  //               ]
-  //             },
-  //             5, 0
-  //           ]
-  //         },
-  //         businessModelMatch: {
-  //           $cond: [
-  //             {
-  //               $or: [
-  //                 {
-  //                   $and: [
-  //                     { $eq: [deal.businessModel?.recurringRevenue || false, true] },
-  //                     { $in: ["Recurring Revenue", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-  //                   ]
-  //                 },
-  //                 {
-  //                   $and: [
-  //                     { $eq: [deal.businessModel?.projectBased || false, true] },
-  //                     { $in: ["Project-Based", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-  //                   ]
-  //                 },
-  //                 {
-  //                   $and: [
-  //                     { $eq: [deal.businessModel?.assetLight || false, true] },
-  //                     { $in: ["Asset Light", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-  //                   ]
-  //                 },
-  //                 {
-  //                   $and: [
-  //                     { $eq: [deal.businessModel?.assetHeavy || false, true] },
-  //                     { $in: ["Asset Heavy", { $ifNull: ["$targetCriteria.preferredBusinessModels", []] }] }
-  //                   ]
-  //                 }
-  //               ]
-  //             },
-  //             12, 0
-  //           ]
-  //         },
-  //         capitalAvailabilityMatch: {
-  //           $cond: [
-  //             {
-  //               $or: [
-  //                 { $eq: [{ $ifNull: [deal.buyerFit?.capitalAvailability || [], null] }, null] },
-  //                 { $eq: [{ $size: { $ifNull: [deal.buyerFit?.capitalAvailability || [], []] } }, 0] },
-  //                 { $in: ["$capitalEntity", deal.buyerFit?.capitalAvailability || []] }
-  //               ]
-  //             },
-  //             4, 0
-  //           ]
-  //         },
-  //         companyTypeMatch: {
-  //           $cond: [
-  //             {
-  //               $or: [
-  //                 { $eq: [{ $ifNull: [deal.companyType || [], null] }, null] },
-  //                 { $eq: [{ $size: { $ifNull: [deal.companyType || [], []] } }, 0] },
-  //                 { $in: ["$companyType", deal.companyType || []] }
-  //               ]
-  //             },
-  //             4, 0
-  //           ]
-  //         },
-  //         minTransactionSizeMatch: {
-  //           $cond: [
-  //             {
-  //               $and: [
-  //                 { $gte: [deal.buyerFit?.minTransactionSize || 0, { $ifNull: ["$targetCriteria.transactionSizeMin", 0] }] },
-  //                 { $lte: [deal.buyerFit?.minTransactionSize || 0, { $ifNull: ["$targetCriteria.transactionSizeMax", Number.MAX_SAFE_INTEGER] }] }
-  //               ]
-  //             },
-  //             5, 0
-  //           ]
-  //         },
-  //         priorAcquisitionsMatch: {
-  //           $cond: [
-  //             {
-  //               $or: [
-  //                 { $eq: [{ $ifNull: [deal.buyerFit?.minPriorAcquisitions || null, null] }, null] },
-  //                 { $gte: [{ $ifNull: ["$dealsCompletedLast5Years", 0] }, { $ifNull: [deal.buyerFit?.minPriorAcquisitions || 0, 0] }] }
-  //               ]
-  //             },
-  //             5, 0
-  //           ]
-  //         },
-  //         stakePercentageMatch: {
-  //           $cond: [
-  //             {
-  //               $or: [
-  //                 { $eq: [{ $ifNull: ["$targetCriteria.minStakePercent", null] }, null] },
-  //                 { $eq: [{ $ifNull: [deal.stakePercentage || null, null] }, null] },
-  //                 { $gte: [{ $ifNull: [deal.stakePercentage || 100, 100] }, { $ifNull: ["$targetCriteria.minStakePercent", 0] }] }
-  //               ]
-  //             },
-  //             4, 0
-  //           ]
-  //         }
-  //       }
-  //     },
-  //     {
-  //       $addFields: {
-  //         totalMatchScore: {
-  //           $sum: [
-  //             "$industryMatch",
-  //             "$geographyMatch",
-  //             "$revenueMatch",
-  //             "$ebitdaMatch",
-  //             "$revenueGrowthMatch",
-  //             "$yearsMatch",
-  //             "$businessModelMatch",
-  //             "$capitalAvailabilityMatch",
-  //             "$companyTypeMatch",
-  //             "$minTransactionSizeMatch",
-  //             "$priorAcquisitionsMatch",
-  //             "$stakePercentageMatch"
-  //           ]
-  //         },
-  //         matchPercentage: {
-  //           $multiply: [
-  //             {
-  //               $divide: [
-  //                 {
-  //                   $sum: [
-  //                     "$industryMatch",
-  //                     "$geographyMatch",
-  //                     "$revenueMatch",
-  //                     "$ebitdaMatch",
-  //                     "$revenueGrowthMatch",
-  //                     "$yearsMatch",
-  //                     "$businessModelMatch",
-  //                     "$capitalAvailabilityMatch",
-  //                     "$companyTypeMatch",
-  //                     "$minTransactionSizeMatch",
-  //                     "$priorAcquisitionsMatch",
-  //                     "$stakePercentageMatch"
-  //                   ]
-  //                 },
-  //                 80 // 10+10+8+8+5+5+12+4+4+5+5+4 = 80
-  //               ]
-  //             },
-  //             100
-  //           ]
-  //         }
-  //       }
-  //     },
-  //     { $match: { matchPercentage: { $gte: 100 } } },
-  //     {
-  //       $project: {
-  //         _id: 1,
-  //         companyName: 1,
-  //         buyerId: "$buyer",
-  //         buyerName: "$buyerInfo.fullName",
-  //         buyerEmail: "$buyerInfo.email",
-  //         targetCriteria: 1,
-  //         preferences: 1,
-  //         companyType: 1,
-  //         capitalEntity: 1,
-  //         dealsCompletedLast5Years: 1,
-  //         averageDealSize: 1,
-  //         totalMatchScore: 1,
-  //         matchPercentage: { $round: ["$matchPercentage", 0] },
-  //         website: "$website",
-  //         matchScores: {
-  //           industryMatch: "$industryMatch",
-  //           geographyMatch: "$geographyMatch",
-  //           revenueMatch: "$revenueMatch",
-  //           ebitdaMatch: "$ebitdaMatch",
-  //           revenueGrowthMatch: "$revenueGrowthMatch",
-  //           yearsMatch: "$yearsMatch",
-  //           businessModelMatch: "$businessModelMatch",
-  //           capitalAvailabilityMatch: "$capitalAvailabilityMatch",
-  //           companyTypeMatch: "$companyTypeMatch",
-  //           minTransactionSizeMatch: "$minTransactionSizeMatch",
-  //           priorAcquisitionsMatch: "$priorAcquisitionsMatch",
-  //           stakePercentageMatch: "$stakePercentageMatch"
-  //         },
-  //         matchDetails: {
-  //           industryMatch: true,
-  //           geographyMatch: true,
-  //           revenueMatch: { $gt: ["$revenueMatch", 0] },
-  //           ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
-  //           revenueGrowthMatch: { $gt: ["$revenueGrowthMatch", 0] },
-  //           yearsMatch: { $gt: ["$yearsMatch", 0] },
-  //           businessModelMatch: { $gt: ["$businessModelMatch", 0] },
-  //           capitalAvailabilityMatch: { $gt: ["$capitalAvailabilityMatch", 0] },
-  //           companyTypeMatch: { $gt: ["$companyTypeMatch", 0] },
-  //           minTransactionSizeMatch: { $gt: ["$minTransactionSizeMatch", 0] },
-  //           priorAcquisitionsMatch: { $gt: ["$priorAcquisitionsMatch", 0] },
-  //           stakePercentageMatch: { $gt: ["$stakePercentageMatch", 0] }
-  //         },
-  //         criteriaDetails: {
-  //           dealIndustry: deal.industrySector,
-  //           dealGeography: deal.geographySelection,
-  //           dealRevenue: deal.financialDetails?.trailingRevenueAmount || null,
-  //           dealEbitda: deal.financialDetails?.trailingEBITDAAmount || null,
-  //           dealAvgRevenueGrowth: deal.financialDetails?.avgRevenueGrowth || null,
-  //           dealYearsInBusiness: deal.yearsInBusiness || null,
-  //           dealStakePercentage: deal.stakePercentage || null,
-  //           dealCompanyType: deal.companyType || [],
-  //           dealCapitalAvailability: deal.buyerFit?.capitalAvailability || [],
-  //           dealMinTransactionSize: deal.buyerFit?.minTransactionSize || null,
-  //           dealMinPriorAcquisitions: deal.buyerFit?.minPriorAcquisitions || null,
-  //           dealRewardLevel: deal.rewardLevel,
-  //           expandedGeographies: expandedGeos
-  //         }
-  //       }
-  //     },
-  //     { $sort: { matchPercentage: -1, companyName: 1 } }
-  //   ]).exec();
-  //   return matchingProfiles;
-  // }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  // ----------------------------------------------------------------------------------------------------------------
-
-
-
   async findMatchingBuyers(dealId: string): Promise<any[]> {
     const deal = await this.findOne(dealId);
     const companyProfileModel = this.dealModel.db.model('CompanyProfile');
     const expandedGeos = expandCountryOrRegion(deal.geographySelection);
+    const dealIndustries = this.getDealIndustries(deal);
     const { rewardLevel } = deal;
     let extraMatchCondition: any = {};
     if (rewardLevel === "Seed") {
@@ -1147,9 +1597,12 @@ export class DealsService {
     const mandatoryQuery: any = {
       "preferences.stopSendingDeals": { $ne: true },
       "targetCriteria.countries": { $in: expandedGeos },
-      "targetCriteria.industrySectors": deal.industrySector,
+      "targetCriteria.industrySectors": { $in: dealIndustries },
       ...extraMatchCondition,
     };
+    if (deal.requiresBuyerFeeAboveAmplifyFees) {
+      mandatoryQuery["preferences.allowBuyerLikeDeals"] = true;
+    }
     const matchingProfiles = await companyProfileModel.aggregate([
       { $match: mandatoryQuery },
       ...(alreadyInvitedBuyerIds.length > 0
@@ -1217,17 +1670,6 @@ export class DealsService {
                 ]
               },
               8, 0
-            ]
-          },
-          revenueGrowthMatch: {
-            $cond: [
-              {
-                $or: [
-                  { $eq: [{ $ifNull: ["$targetCriteria.revenueGrowth", null] }, null] },
-                  { $gte: [{ $ifNull: [deal.financialDetails?.avgRevenueGrowth || 0, 0] }, { $ifNull: ["$targetCriteria.revenueGrowth", 0] }] }
-                ]
-              },
-              5, 0
             ]
           },
           yearsMatch: {
@@ -1342,7 +1784,6 @@ export class DealsService {
               "$geographyMatch",
               "$revenueMatch",
               "$ebitdaMatch",
-              "$revenueGrowthMatch",
               "$yearsMatch",
               "$businessModelMatch",
               "$capitalAvailabilityMatch",
@@ -1362,7 +1803,6 @@ export class DealsService {
                       "$geographyMatch",
                       "$revenueMatch",
                       "$ebitdaMatch",
-                      "$revenueGrowthMatch",
                       "$yearsMatch",
                       "$businessModelMatch",
                       "$capitalAvailabilityMatch",
@@ -1372,7 +1812,7 @@ export class DealsService {
                       "$stakePercentageMatch"
                     ]
                   },
-                  80 // 10+10+8+8+5+5+12+4+4+5+5+4 = 80
+                  75 // 10+10+8+8+5+12+4+4+5+5+4 = 75
                 ]
               },
               100
@@ -1402,7 +1842,6 @@ export class DealsService {
             geographyMatch: "$geographyMatch",
             revenueMatch: "$revenueMatch",
             ebitdaMatch: "$ebitdaMatch",
-            revenueGrowthMatch: "$revenueGrowthMatch",
             yearsMatch: "$yearsMatch",
             businessModelMatch: "$businessModelMatch",
             capitalAvailabilityMatch: "$capitalAvailabilityMatch",
@@ -1416,7 +1855,6 @@ export class DealsService {
             geographyMatch: true,
             revenueMatch: { $gt: ["$revenueMatch", 0] },
             ebitdaMatch: { $gt: ["$ebitdaMatch", 0] },
-            revenueGrowthMatch: { $gt: ["$revenueGrowthMatch", 0] },
             yearsMatch: { $gt: ["$yearsMatch", 0] },
             businessModelMatch: { $gt: ["$businessModelMatch", 0] },
             capitalAvailabilityMatch: { $gt: ["$capitalAvailabilityMatch", 0] },
@@ -1427,10 +1865,10 @@ export class DealsService {
           },
           criteriaDetails: {
             dealIndustry: deal.industrySector,
+            dealIndustries,
             dealGeography: deal.geographySelection,
             dealRevenue: deal.financialDetails?.trailingRevenueAmount || null,
             dealEbitda: deal.financialDetails?.trailingEBITDAAmount || null,
-            dealAvgRevenueGrowth: deal.financialDetails?.avgRevenueGrowth || null,
             dealYearsInBusiness: deal.yearsInBusiness || null,
             dealStakePercentage: deal.stakePercentage || null,
             dealCompanyType: deal.companyType || [],
@@ -1453,8 +1891,24 @@ export class DealsService {
       throw new Error(`Deal with ID ${dealId} not found`);
     }
 
+    let eligibleBuyerIds = buyerIds;
+    if (deal.requiresBuyerFeeAboveAmplifyFees) {
+      eligibleBuyerIds = await this.filterFeeEligibleBuyerIds(buyerIds);
+      if (eligibleBuyerIds.length !== buyerIds.length) {
+        throw new BadRequestException(
+          "One or more selected buyers do not allow buy-side fees above CIM Amplify fees.",
+        );
+      }
+    }
+
     const existingTargets = deal.targetedBuyers.map((id) => id.toString());
-    const newTargets = buyerIds.filter((id) => !existingTargets.includes(id));
+    const newTargets = eligibleBuyerIds.filter((id) => !existingTargets.includes(id));
+    const resendEligibleExistingTargets = eligibleBuyerIds.filter((id) => {
+      if (!existingTargets.includes(id)) return false;
+      const invitation = deal.invitationStatus?.get(id as any);
+      return invitation?.response === "pending" || invitation?.response === "requested";
+    });
+    const inviteBuyerIds = Array.from(new Set([...newTargets, ...resendEligibleExistingTargets]));
 
     if (newTargets.length > 0) {
       deal.targetedBuyers = [...deal.targetedBuyers, ...newTargets];
@@ -1469,14 +1923,27 @@ export class DealsService {
       // Save deal FIRST so targeting is persisted regardless of email outcome
       deal.timeline.updatedAt = new Date();
       await deal.save();
+      await this.syncBuyerDealCountsForDeal(deal);
 
-      // Send emails in the background - don't block the API response
       const dealIdStr =
         deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
 
-      this.sendBuyerInviteEmails(deal, newTargets, dealIdStr).catch((err) => {
-        console.error(`Background email sending completed with errors for deal ${dealIdStr}:`, err.message);
-      });
+      // Await email sending before returning — on serverless (Vercel) fire-and-forget
+      // tasks are killed when the HTTP response is sent, so emails would never arrive.
+      try {
+        await this.sendBuyerInviteEmails(deal, inviteBuyerIds, dealIdStr);
+      } catch (err) {
+        this.logger.error(`Email sending failed for deal ${dealIdStr}: ${err.message}`);
+        // Deal is already saved — don't fail the whole request over email errors
+      }
+    } else if (inviteBuyerIds.length > 0) {
+      const dealIdStr =
+        deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
+      try {
+        await this.sendBuyerInviteEmails(deal, inviteBuyerIds, dealIdStr);
+      } catch (err) {
+        this.logger.error(`Invite resend failed for deal ${dealIdStr}: ${err.message}`);
+      }
     }
 
     return deal;
@@ -1492,10 +1959,10 @@ export class DealsService {
     dealIdStr: string,
   ): Promise<void> {
     const BATCH_SIZE = 5;
-    const DELAY_BETWEEN_BATCHES_MS = 3000;
+    const DELAY_BETWEEN_BATCHES_MS = 1000; // 1s between batches to respect Gmail rate limits
 
-    const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingRevenueAmount || 0);
-    const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
+    const trailingRevenueAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(deal.financialDetails?.trailingRevenueAmount || 0);
+    const trailingEBITDAAmount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(deal.financialDetails?.trailingEBITDAAmount || 0);
 
     for (let i = 0; i < buyerIds.length; i += BATCH_SIZE) {
       const batch = buyerIds.slice(i, i + BATCH_SIZE);
@@ -1511,48 +1978,115 @@ export class DealsService {
             const buyer = await this.buyerModel.findById(buyerId).exec();
             if (!buyer) return;
 
-            const subject = `YOU ARE INVITED TO PARTICIPATE IN A ${trailingEBITDAAmount} DEAL`;
-            const activateUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=activate&dealId=${dealIdStr}`;
-            const passUrl = `${process.env.FRONTEND_URL}/buyer/deals?action=pass&dealId=${dealIdStr}`;
+            // Generate a unique token for this deal-buyer pair.
+            // Token creation is intentionally isolated — if it fails, email still goes out
+            // using the dashboard URL as fallback so buyers are never silently skipped.
+            let activateUrl: string;
+            let passUrl: string;
 
-            const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], `
-              <p><b>Details:</b> ${deal.companyDescription}</p>
-              <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
-              <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
+            try {
+              const rawToken = crypto.randomBytes(32).toString('hex');
+              const hmacSecret = this.getHmacSecret();
+              const signature = crypto.createHmac('sha256', hmacSecret)
+                .update(`${rawToken}:${dealIdStr}:${buyerId}`)
+                .digest('hex');
+              await this.dealActionTokenModel.create({
+                token: rawToken,
+                signature,
+                dealId: dealIdStr,
+                buyerId,
+                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+              });
+              activateUrl = `${getFrontendUrl()}/deal-action/${rawToken}?action=activate`;
+              passUrl = `${getFrontendUrl()}/deal-action/${rawToken}?action=pass`;
+            } catch (tokenErr) {
+              this.logger.error(`Token creation failed for buyer ${buyerId} on deal ${dealIdStr}: ${tokenErr.message}. Falling back to dashboard URL.`);
+              activateUrl = `${getFrontendUrl()}/buyer/deals?action=activate&dealId=${dealIdStr}`;
+              passUrl = `${getFrontendUrl()}/buyer/deals?action=pass&dealId=${dealIdStr}`;
+            }
 
-              <!-- Action Buttons -->
-              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 24px 0;">
-                <tr>
-                  <td align="center">
-                    <table border="0" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td align="center" style="padding-right: 12px;">
-                          <a href="${activateUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #3AAFA9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Move to Active / Request Info</a>
-                        </td>
-                        <td align="center" style="padding-left: 12px;">
-                          <a href="${passUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #E35153; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Pass</a>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
+            const subject = `YOU ARE INVITED TO PARTICIPATE IN A ${trailingEBITDAAmount} EBITDA DEAL`;
 
-              <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard under Pending to see more details.</p>
-              <p>Please keep your dashboard up to date by responding to Pending deals promptly.</p>
-              ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
-            `);
+            const recipients = await this.getBuyerEmailRecipients(buyer as any);
+            const ownerEmail = (buyer.email || '').trim().toLowerCase();
+            const inviteRecipients = ownerEmail
+              ? Array.from(
+                  new Map(
+                    [
+                      ...recipients,
+                      { email: ownerEmail, fullName: (buyer.fullName || '').trim() || 'User' },
+                    ].map((recipient) => [recipient.email, recipient]),
+                  ).values(),
+                )
+              : recipients;
 
-            await this.mailService.sendEmailWithLogging(
-              buyer.email,
-              'buyer',
-              subject,
-              htmlBody,
-              [ILLUSTRATION_ATTACHMENT],
-              dealIdStr,
+            if (inviteRecipients.length === 0) {
+              this.logger.warn(`No invite recipients resolved for buyer ${buyerId} on deal ${dealIdStr}`);
+              return;
+            }
+
+            const buildInviteBody = (recipientName: string) =>
+              genericEmailTemplate(subject, getFirstName(recipientName), `
+                <p><b>Details:</b> ${deal.companyDescription}</p>
+                <p><b>T12 Revenue</b>: ${trailingRevenueAmount}</p>
+                <p><b>T12 EBITDA</b>: ${trailingEBITDAAmount}</p>
+
+                <!-- Action Buttons -->
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 24px 0;">
+                  <tr>
+                    <td align="center">
+                      <table border="0" cellpadding="0" cellspacing="0">
+                        <tr>
+                          <td align="center" style="padding-right: 12px;">
+                            <a href="${activateUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #3AAFA9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Move to Active / Request Info</a>
+                          </td>
+                          <td align="center" style="padding-left: 12px;">
+                            <a href="${passUrl}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #E35153; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Pass</a>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+
+                <p>Many of our deals are exclusive first look for CIM Amplify Members only. Head to your CIM Amplify dashboard under Pending to see more details.</p>
+                <p>Please keep your dashboard up to date by responding to Pending deals promptly.</p>
+                ${emailButton('View Dashboard', `${getFrontendUrl()}/buyer/deals`)}
+              `);
+
+            const sendResults = await Promise.allSettled(
+              inviteRecipients.map((recipient) => {
+                return this.mailService.sendEmailWithLogging(
+                  recipient.email,
+                  'buyer',
+                  subject,
+                  buildInviteBody(recipient.fullName),
+                  [ILLUSTRATION_ATTACHMENT],
+                  dealIdStr,
+                );
+              }),
             );
+
+            const successfulSends = sendResults.filter((result) => result.status === 'fulfilled').length;
+            sendResults.forEach((result, index) => {
+              if (result.status === 'rejected') {
+                const failedRecipient = inviteRecipients[index];
+                this.logger.error(
+                  `Invite email failed for recipient ${failedRecipient?.email || 'unknown'} (buyer=${buyerId}, deal=${dealIdStr}): ${this.formatError(result.reason)}`,
+                );
+              }
+            });
+            if (successfulSends === 0) {
+              const rejectedReasons = sendResults
+                .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+                .map((result) => this.formatError(result.reason))
+                .join(' | ');
+              this.logger.error(
+                `Invite email failed for all resolved recipients (buyer=${buyerId}, deal=${dealIdStr}). Reasons: ${rejectedReasons || 'Unknown error'}`,
+              );
+            }
           } catch (emailError) {
-            console.error(`Failed to send invite email to buyer ${buyerId}:`, emailError.message);
+            this.logger.error(`Failed to send invite email to buyer ${buyerId}: ${emailError.message}`);
           }
         }),
       );
@@ -1604,6 +2138,7 @@ export class DealsService {
       })
       await tracking.save()
       await deal.save()
+      await this.syncBuyerDealCountsForDeal(deal)
       return { deal, tracking }
     } catch (error) {
       throw new Error(`Failed to update deal status: ${error.message}`)
@@ -1630,12 +2165,25 @@ export class DealsService {
 
       // Update invitation status
       const currentInvitation = dealDoc.invitationStatus.get(buyerId)
+      const preserveAdvisorFlag = status === "active" && currentInvitation?.flaggedInactive
+      const flagFields = preserveAdvisorFlag
+        ? {
+            flaggedInactive: true,
+            flaggedInactiveAt: currentInvitation?.flaggedInactiveAt,
+            flaggedInactiveBy: currentInvitation?.flaggedInactiveBy,
+          }
+        : {
+            flaggedInactive: false,
+            flaggedInactiveAt: undefined,
+            flaggedInactiveBy: undefined,
+          }
       dealDoc.invitationStatus.set(buyerId, {
         invitedAt: currentInvitation?.invitedAt || new Date(),
         respondedAt: new Date(),
         response: status === "active" ? "accepted" : status,
         notes: notes || "",
         decisionBy: 'buyer',
+        ...flagFields,
       })
 
       // Update interested buyers list
@@ -1681,6 +2229,10 @@ export class DealsService {
       await tracking.save()
       dealDoc.timeline.updatedAt = new Date()
       await dealDoc.save() // Now calling save() on the document
+      await this.syncBuyerDealCountsForDeal(dealDoc as DealDocument);
+      // Invalidate this buyer's cached deal lists so the UI shows fresh state immediately
+      cacheInvalidate(`buyer:deals:${buyerId}:`, true);
+      this.invalidateAdminCaches();
 
       // Send email notifications based on status
       if (status === "active") {
@@ -1691,10 +2243,10 @@ export class DealsService {
 
         // Email to Advisor (Seller)
         if (seller && buyer) {
-          const advisorSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
-          const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+          const advisorSubject = `${buyer.companyName} is interested in ${dealDoc.title} on CIM Amplify`;
+          const advisorContent = `
             <p>${buyer.fullName} at ${buyer.companyName} is interested in learning more about ${dealDoc.title}.  If you attached an NDA to this deal it has already been sent to the buyer for execution.</p>
-            <p>Here are the buyer's details:</p>
+            <p>Here are the buyer's details, please reach out to them right away:</p>
             <p>
               ${buyer.fullName}<br>
               ${buyer.companyName}<br>
@@ -1702,15 +2254,13 @@ export class DealsService {
               ${buyer.phone}<br>
               ${(companyProfile as any)?.website || ''}
             </p>
-            <p>Thank you!</p>
-          `);
+          `;
 
           try {
-            await this.mailService.sendEmailWithLogging(
-              seller.email,
-              'seller',
+            await this.sendSellerDealEmail(
+              seller,
               advisorSubject,
-              advisorHtmlBody,
+              advisorContent,
               [ILLUSTRATION_ATTACHMENT], // attachments
               (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
             );
@@ -1721,7 +2271,8 @@ export class DealsService {
           const buyerSubject = `CIM AMPLIFY INTRODUCTION FOR ${dealDoc.title}`;
           const hasNda = dealDoc.ndaDocument && dealDoc.ndaDocument.base64Content;
           const ndaFileName = hasNda && dealDoc.ndaDocument ? dealDoc.ndaDocument.originalName : '';
-          const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+          const ndaDownloadUrl = hasNda ? this.buildNdaDownloadUrl((dealDoc._id as Types.ObjectId).toString()) : '';
+          const buyerEmailContent = `
             <p>Thank you for accepting an introduction to <strong>${dealDoc.title}</strong>. We've notified the Advisor who will reach out to you directly:</p>
             <p style="margin: 16px 0; padding: 12px; background-color: #f5f5f5; border-radius: 8px;">
               <strong>${seller.fullName}</strong><br>
@@ -1747,10 +2298,11 @@ export class DealsService {
                           </td>
                           <td>
                             <strong style="color: #333; font-size: 14px;">${ndaFileName}</strong><br>
-                            <span style="color: #666; font-size: 12px;">Please download the attachment</span>
+                            <span style="color: #666; font-size: 12px;">Click below to download</span>
                           </td>
                         </tr>
                       </table>
+                      <a href="${ndaDownloadUrl}" target="_blank" style="display: inline-block; margin-top: 12px; padding: 10px 20px; background-color: #3aafa9; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 13px;">Download NDA</a>
                       <p style="margin: 12px 0 0 0; color: #333; font-size: 13px;">
                         <strong>Next steps:</strong> Fill out and sign the NDA, then send it directly to the Advisor at
                         <a href="mailto:${seller.email}" style="color: #3aafa9;">${seller.email}</a>
@@ -1762,9 +2314,9 @@ export class DealsService {
               : ''
             }
             <p>To review this and other deals please go to your dashboard.</p>
-            ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/buyer/deals`)}
+            ${emailButton('View Dashboard', `${getFrontendUrl()}/buyer/deals`)}
             <p>If you don't hear back within 2 days, reply to this email and our team will assist.</p>
-          `);
+          `;
 
           // Build attachments array - include NDA if available
           const buyerAttachments: any[] = [ILLUSTRATION_ATTACHMENT];
@@ -1780,40 +2332,31 @@ export class DealsService {
           }
 
           try {
-            await this.mailService.sendEmailWithLogging(
-              buyer.email,
-              'buyer',
-              buyerSubject,
-              buyerHtmlBody,
-              buyerAttachments,
-              (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
-            );
-          } catch (emailError) {
-            // Failed to send email to buyer
-          }
-        }
-      } else if (status === "rejected") {
-        // Buyer rejects deal: Notify seller
-        const seller = await this.sellerModel.findById(dealDoc.seller).exec();
-        const buyer = await this.buyerModel.findById(buyerId).exec();
+            const recipients = await this.getBuyerEmailRecipients(buyer as any);
+            if (recipients.length === 0) {
+              this.logger.warn(`No intro recipients resolved for buyer ${buyerId} on deal ${dealId}`);
+            } else {
+              await Promise.allSettled(
+                recipients.map((recipient) => {
+                  const buyerHtmlBody = genericEmailTemplate(
+                    buyerSubject,
+                    getFirstName(recipient.fullName),
+                    buyerEmailContent,
+                  );
 
-        if (seller && buyer) {
-          const subject = `${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}`;
-          const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
-            <p>${buyer.fullName} from ${buyer.companyName} just passed on ${dealDoc.title}. You can view all of your buyer activity on your dashboard.</p>
-            ${emailButton('View Dashboard', `${process.env.FRONTEND_URL}/seller/dashboard`)}
-          `);
-          try {
-            await this.mailService.sendEmailWithLogging(
-              seller.email,
-              'seller',
-              subject,
-              htmlBody,
-              [ILLUSTRATION_ATTACHMENT], // attachments
-              (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
-            );
-          } catch (rejectionEmailError) {
-            console.error(`Failed to send rejection notification email for deal ${dealId}:`, rejectionEmailError.message);
+                  return this.mailService.sendEmailWithLogging(
+                    recipient.email,
+                    'buyer',
+                    buyerSubject,
+                    buyerHtmlBody,
+                    buyerAttachments,
+                    (dealDoc._id as Types.ObjectId).toString(), // relatedDealId
+                  );
+                }),
+              );
+            }
+          } catch (emailError) {
+            this.logger.error(`Failed to send activation email for buyer ${buyerId} on deal ${dealId}`, this.formatError(emailError));
           }
         }
       }
@@ -1826,6 +2369,12 @@ export class DealsService {
 
   // Replace the existing getBuyerDeals method with this improved version
   async getBuyerDeals(buyerId: string, status?: "pending" | "active" | "rejected" | "completed"): Promise<Deal[]> {
+    // Per-buyer cache. 15s TTL keeps dashboards responsive without stale-data pain.
+    const key = `buyer:deals:${buyerId}:${status || 'all'}`;
+    return cached(key, 15_000, () => this.getBuyerDealsUncached(buyerId, status));
+  }
+
+  private async getBuyerDealsUncached(buyerId: string, status?: "pending" | "active" | "rejected" | "completed"): Promise<Deal[]> {
     const queryOptions = {
       sort: { "timeline.updatedAt": -1 },
       populate: { path: 'seller', select: 'fullName companyName' },
@@ -1897,9 +2446,14 @@ export class DealsService {
   }
 
   async getDealHistory(sellerId: string): Promise<any[]> {
-    const deals = await this.dealModel.find({ seller: sellerId }).exec()
+    const deals = await this.dealModel
+      .find({ seller: sellerId })
+      .select('_id')
+      .limit(10000)
+      .lean()
+      .exec()
 
-    const dealIds = deals.map((deal) => deal._id)
+    const dealIds = deals.map((deal: any) => deal._id)
 
     const dealTrackingModel = this.dealModel.db.model("DealTracking")
     const trackingData = await dealTrackingModel
@@ -2106,21 +2660,53 @@ export class DealsService {
   }
 
 
-  async getDocumentFile(dealId: string, filename: string): Promise<{ stream: fs.ReadStream; mimetype: string; originalName: string }> {
+  async getDocumentFile(
+    dealId: string,
+    filename: string,
+    userId: string,
+    userRole: string,
+  ): Promise<{ buffer: Buffer; mimetype: string; originalName: string }> {
     const deal = await this.findOne(dealId);
+
+    const isAdmin = userRole === "admin";
+    const isOwningSeller =
+      (userRole === "seller" || userRole === "seller-member") &&
+      deal.seller?.toString() === userId;
+
+    let isInvitedBuyer = false;
+    if (userRole === "buyer" || userRole === "buyer-member") {
+      const invitationStatusObj = deal.invitationStatus instanceof Map
+        ? Object.fromEntries(deal.invitationStatus)
+        : (deal.invitationStatus || {});
+      isInvitedBuyer = Object.prototype.hasOwnProperty.call(invitationStatusObj, userId);
+    }
+
+    if (!isAdmin && !isOwningSeller && !isInvitedBuyer) {
+      throw new ForbiddenException("You do not have permission to access this document");
+    }
+
     const document = deal.documents?.find((doc) => doc.filename === filename);
     if (!document) {
       throw new NotFoundException(`Document ${filename} not found for deal ${dealId}`);
     }
-    const filePath = path.resolve(document.path);
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException(`File ${filename} not found on server`);
+    if (document.base64Content) {
+      return {
+        buffer: Buffer.from(document.base64Content, "base64"),
+        mimetype: document.mimetype,
+        originalName: document.originalName,
+      };
     }
-    return {
-      stream: fs.createReadStream(filePath),
-      mimetype: document.mimetype,
-      originalName: document.originalName,
-    };
+    if (document.path) {
+      const filePath = path.resolve(document.path);
+      if (fs.existsSync(filePath)) {
+        return {
+          buffer: fs.readFileSync(filePath),
+          mimetype: document.mimetype,
+          originalName: document.originalName,
+        };
+      }
+    }
+    throw new NotFoundException(`File ${filename} not found. Legacy disk uploads are no longer available; please re-upload this document.`);
   }
 
   async getDealWithBuyerStatusSummary(dealId: string): Promise<any> {
@@ -2138,6 +2724,9 @@ export class DealsService {
         .map(([buyerId, status]) => ({
           buyerId,
           response: status.response,
+          flaggedInactive: !!(status as any).flaggedInactive,
+          flaggedInactiveAt: (status as any).flaggedInactiveAt ?? null,
+          flaggedInactiveBy: (status as any).flaggedInactiveBy ?? null,
         }));
 
       const buyersByStatus: {
@@ -2157,7 +2746,7 @@ export class DealsService {
       const companyProfileModel = this.dealModel.db.model('CompanyProfile');
 
       // Process invitationStatus - this is the authoritative source for buyer counts
-      for (const { buyerId, response } of invitationStatusArray) {
+      for (const { buyerId, response, flaggedInactive, flaggedInactiveAt, flaggedInactiveBy } of invitationStatusArray) {
         const [buyer, companyProfile] = await Promise.all([
           this.buyerModel
             .findById(buyerId)
@@ -2185,6 +2774,9 @@ export class DealsService {
           buyerName: buyer.fullName || 'Unknown',
           buyerEmail: buyer.email || '',
           buyerCompany: companyName,
+          flaggedInactive,
+          flaggedInactiveAt,
+          flaggedInactiveBy,
         };
 
         buyerMap.set(buyerId, buyerData);
@@ -2245,6 +2837,7 @@ export class DealsService {
     notes?: string,
     winningBuyerId?: string,
     userRole?: string,
+    buyerFromCIM?: boolean,
   ): Promise<Deal> {
     const dealDoc = await this.dealModel.findById(dealId).exec();
     if (!dealDoc) {
@@ -2297,57 +2890,106 @@ export class DealsService {
     }
 
     const dealTrackingModel = this.dealModel.db.model('DealTracking');
+    const rawWinningBuyerId = (() => {
+      if (typeof winningBuyerId === 'string') return winningBuyerId.trim();
+      if (winningBuyerId && typeof winningBuyerId === 'object' && '_id' in (winningBuyerId as any)) {
+        return String((winningBuyerId as any)._id).trim();
+      }
+      return '';
+    })();
+    const normalizedWinningBuyerId = Types.ObjectId.isValid(rawWinningBuyerId) ? rawWinningBuyerId : '';
+    const existingWinningBuyerId = dealDoc.closedWithBuyer ? String(dealDoc.closedWithBuyer).trim() : '';
+    const explicitlyNonCimBuyer = buyerFromCIM === false;
+
+    const acceptedBuyerIds: string[] = [];
+    if (dealDoc.invitationStatus instanceof Map) {
+      dealDoc.invitationStatus.forEach((status, buyerId) => {
+        if (status?.response === 'accepted') {
+          acceptedBuyerIds.push(String(buyerId));
+        }
+      });
+    } else if (dealDoc.invitationStatus && typeof dealDoc.invitationStatus === 'object') {
+      Object.entries(dealDoc.invitationStatus as Record<string, any>).forEach(([buyerId, status]) => {
+        if ((status as any)?.response === 'accepted') {
+          acceptedBuyerIds.push(String(buyerId));
+        }
+      });
+    }
+
+    const inferredAcceptedBuyerId = acceptedBuyerIds.length === 1 ? acceptedBuyerIds[0] : '';
+    const resolvedWinningBuyerId = explicitlyNonCimBuyer
+      ? ''
+      : (normalizedWinningBuyerId || existingWinningBuyerId || inferredAcceptedBuyerId);
+    const winningBuyer = resolvedWinningBuyerId && Types.ObjectId.isValid(resolvedWinningBuyerId)
+      ? await this.buyerModel.findById(resolvedWinningBuyerId).exec()
+      : null;
+    const hasCimAmplifyWinningBuyer = !explicitlyNonCimBuyer && !!winningBuyer;
+    const shouldMarkAsCimAmplify = !explicitlyNonCimBuyer && (
+      buyerFromCIM === true ||
+      !!winningBuyer ||
+      !!normalizedWinningBuyerId ||
+      !!existingWinningBuyerId ||
+      !!inferredAcceptedBuyerId
+    );
+
     const trackingData: any = {
       deal: dealId,
       interactionType: 'completed',
       timestamp: new Date(),
       notes: notes || 'Deal closed by seller',
-      metadata: { finalSalePrice, winningBuyerId },
+      metadata: {
+        finalSalePrice,
+        winningBuyerId: winningBuyer?._id?.toString() || normalizedWinningBuyerId || null,
+        buyerFromCIM: buyerFromCIM ?? null,
+      },
     };
 
-    if (winningBuyerId) {
-      trackingData.buyer = winningBuyerId;
+    dealDoc.closedWithCimAmplify = shouldMarkAsCimAmplify;
+    dealDoc.markModified('closedWithCimAmplify');
+
+    if (hasCimAmplifyWinningBuyer) {
+      trackingData.buyer = winningBuyer!._id.toString();
       // Store buyer info in the deal document
-      const buyer = await this.buyerModel.findById(winningBuyerId).lean();
-      if (buyer) {
-        dealDoc.closedWithBuyer = winningBuyerId;
-        dealDoc.closedWithBuyerCompany = buyer.companyName || '';
-        dealDoc.closedWithBuyerEmail = buyer.email || '';
-        dealDoc.markModified('closedWithBuyer');
-        dealDoc.markModified('closedWithBuyerCompany');
-        dealDoc.markModified('closedWithBuyerEmail');
-      }
+      dealDoc.closedWithBuyer = winningBuyer!._id.toString();
+      dealDoc.closedWithBuyerCompany = winningBuyer!.companyName || '';
+      dealDoc.closedWithBuyerEmail = winningBuyer!.email || '';
+      dealDoc.markModified('closedWithBuyer');
+      dealDoc.markModified('closedWithBuyerCompany');
+      dealDoc.markModified('closedWithBuyerEmail');
+    } else if (shouldMarkAsCimAmplify && normalizedWinningBuyerId) {
+      // Preserve selected buyer id even if buyer lookup fails to avoid losing CIM close attribution.
+      dealDoc.closedWithBuyer = normalizedWinningBuyerId as any;
+      dealDoc.markModified('closedWithBuyer');
     }
 
     const tracking = new dealTrackingModel(trackingData);
     await tracking.save();
     const savedDeal = await dealDoc.save();
+    await this.syncBuyerDealCountsForDeal(dealDoc as DealDocument);
 
     // Phase 4.1: When a deal goes off market (sold to CIM Amplify buyer)
-    if (winningBuyerId) {
+    if (hasCimAmplifyWinningBuyer) {
       const seller = await this.sellerModel.findById(userId).exec();
-      const winningBuyer = await this.buyerModel.findById(winningBuyerId).exec();
 
       if (seller && winningBuyer) {
         const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
         // Email to Advisor (Seller)
         const advisorSubject = `Thank you for using CIM Amplify!`;
-        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+        const advisorContent = `
           <p>Thank you so much for posting your deal on CIM Amplify! We will be in touch to send you your reward once we have contacted the buyer. This process should not take long but feel free to contact us anytime for an update.</p>
           <p>We hope that you will post with us again soon!</p>
-        `);
-        await this.mailService.sendEmailWithLogging(
-          seller.email,
-          'seller',
+        `;
+        await this.sendSellerDealEmail(
+          seller,
           advisorSubject,
-          advisorHtmlBody,
+          advisorContent,
           [ILLUSTRATION_ATTACHMENT], // attachments
           dealIdStr, // relatedDealId
         );
 
         // Email to Buyer
         // const buyerSubject = `Congratulations on your new acquisition!`;
-        // const buyerHtmlBody = genericEmailTemplate(buyerSubject, winningBuyer.fullName.split(' ')[0], `
+        // const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(winningBuyer.fullName), `
         //   <p>Congratulations on your new acquisition! We are excited to have been a part of this journey with you.</p>
         //   <p>We wish you the best in your new venture!</p>
         // `);
@@ -2372,7 +3014,7 @@ export class DealsService {
           <p><b>Buyer Email:</b> ${winningBuyer.email}</p>
         `);
         await this.mailService.sendEmailWithLogging(
-          'canotifications@amp-ven.com',
+          getAdminNotificationEmail(),
           'admin',
           ownerSubject,
           ownerHtmlBody,
@@ -2385,16 +3027,15 @@ export class DealsService {
       const seller = await this.sellerModel.findById(userId).exec();
       if (seller) {
         const subject = `Thank you for using CIM Amplify!`;
-        const htmlBody = genericEmailTemplate(subject, seller.fullName.split(' ')[0], `
-          <p>Thank you so much for posting your deal on CIM Amplify!</p>
+        const content = `
+          <p>Thank you so much for posting ${dealDoc.title} on CIM Amplify!</p>
           <p>We apologize deeply for not helping much with this deal! Fortunately we are adding new buyers daily and we hope that you will post with us again soon! Enjoy your gift card as our appreciation of your hard work.</p>
-        `);
+        `;
         const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
-        await this.mailService.sendEmailWithLogging(
-          seller.email,
-          'seller',
+        await this.sendSellerDealEmail(
+          seller,
           subject,
-          htmlBody,
+          content,
           [ILLUSTRATION_ATTACHMENT], // attachments
           dealIdStr,
         );
@@ -2417,7 +3058,8 @@ export class DealsService {
           // Notify both active (accepted) and pending buyers
           if (status.response === 'accepted' || status.response === 'pending') {
             // Skip the winning buyer if there is one
-            if (!winningBuyerId || buyerId !== winningBuyerId) {
+            const winningBuyerIdToSkip = winningBuyer?._id ? winningBuyer._id.toString() : null;
+            if (!winningBuyerIdToSkip || buyerId !== winningBuyerIdToSkip) {
               buyerIdsToNotify.push(buyerId);
             }
           }
@@ -2440,7 +3082,7 @@ export class DealsService {
                 <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.Thank you for reviewing this deal!</p>
                 <p>We will send you an email when you are invited to participate in new deals and there are lots of in Marketplace for you to review.</p>
                 <p>If you have deals sitting in Pending please respond ASAP as advisors are waiting for your response.</p>
-                ${emailButton('View Available Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
+                ${emailButton('View Available Deals', `${getFrontendUrl()}/buyer/deals`)}
                 <p>Stay tuned for more opportunities!</p>
               `;
             } else if (wasPending) {
@@ -2449,12 +3091,12 @@ export class DealsService {
                 <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.</p>
                 <p>This deal was in your Pending Deals. Please make sure to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
                 <p>Check out other available deals on your dashboard. Also, check out Marketplace on your dashboard for deals that Advisors have posted to all CIM Amplify Members.</p>
-                ${emailButton('View Available Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
+                ${emailButton('View Available Deals', `${getFrontendUrl()}/buyer/deals`)}
                 <p>Stay tuned for more opportunities!</p>
               `;
             }
 
-            const htmlBody = genericEmailTemplate(subject, buyer.fullName.split(' ')[0], emailContent);
+            const htmlBody = genericEmailTemplate(subject, getFirstName(buyer.fullName), emailContent);
 
             await this.mailService.sendEmailWithLogging(
               buyer.email,
@@ -2666,6 +3308,10 @@ export class DealsService {
       const interestedBuyers = await this.buyerModel.aggregate(pipeline).exec();
 
       for (const buyer of interestedBuyers) {
+        const invitationStatusObj = deal.invitationStatus instanceof Map
+          ? deal.invitationStatus.get(String(buyer._id))
+          : (deal.invitationStatus as any)?.[String(buyer._id)];
+
         const interactions = await dealTrackingModel
           .find({
             deal: dealId,
@@ -2678,6 +3324,9 @@ export class DealsService {
         buyer.recentInteractions = interactions;
         buyer.lastInteraction = interactions[0]?.timestamp;
         buyer.totalInteractions = interactions.length;
+        buyer.flaggedInactive = !!invitationStatusObj?.flaggedInactive;
+        buyer.flaggedInactiveAt = invitationStatusObj?.flaggedInactiveAt || null;
+        buyer.flaggedInactiveBy = invitationStatusObj?.flaggedInactiveBy || null;
       }
 
       return interestedBuyers.sort(
@@ -2686,6 +3335,92 @@ export class DealsService {
     } catch (error) {
       throw new InternalServerErrorException(`Failed to get interested buyers details: ${error.message}`);
     }
+  }
+
+  async flagInterestedBuyerInactive(dealId: string, buyerId: string, actorRole: 'seller' | 'admin' = 'seller'): Promise<Deal> {
+    const deal = await this.dealModel.findById(dealId).exec();
+    if (!deal) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+
+    const buyerExists = (deal.interestedBuyers || []).map(String).includes(String(buyerId));
+    if (!buyerExists) {
+      throw new BadRequestException('Buyer is not associated with this deal.');
+    }
+
+    const current = deal.invitationStatus instanceof Map
+      ? deal.invitationStatus.get(String(buyerId))
+      : (deal.invitationStatus as any)?.[String(buyerId)];
+
+    const updatedStatus = {
+      invitedAt: current?.invitedAt,
+      respondedAt: current?.respondedAt,
+      response: 'rejected',
+      notes: current?.notes,
+      decisionBy: current?.decisionBy,
+      introFollowUpSentAt: current?.introFollowUpSentAt,
+      previousStatus: current?.response || 'accepted',
+      flaggedInactive: true,
+      flaggedInactiveAt: new Date(),
+      flaggedInactiveBy: actorRole,
+    } as any;
+
+    if (!(deal.invitationStatus instanceof Map)) {
+      deal.invitationStatus = new Map(Object.entries(deal.invitationStatus || {})) as any;
+    }
+
+    deal.invitationStatus.set(String(buyerId), updatedStatus);
+    deal.markModified('invitationStatus');
+    const savedDeal = await deal.save();
+
+    try {
+      const [seller, buyer] = await Promise.all([
+        this.sellerModel.findById(deal.seller).exec(),
+        this.buyerModel.findById(buyerId).exec(),
+      ]);
+
+      if (seller && buyer) {
+        const advisorCompany = seller.companyName || seller.fullName || 'The Advisor';
+        const dealTitle = savedDeal.title || 'this deal';
+        const dashboardUrl = `${getFrontendUrl()}/buyer/deals?tab=passed&dealId=${encodeURIComponent(dealId)}`;
+        const subject = `${advisorCompany} marked you as inactive on ${dealTitle}`;
+        const recipients = await this.getBuyerEmailRecipients(buyer as any);
+
+        if (recipients.length === 0) {
+          this.logger.warn(`No buyer recipients resolved for flagged-inactive email: buyer=${buyerId}, deal=${dealId}`);
+        } else {
+          await Promise.allSettled(
+            recipients.map((recipient) => {
+              const firstName = getFirstName(recipient.fullName);
+              const htmlBody = genericEmailTemplate(
+                subject,
+                firstName,
+                `
+                  <p>Dear ${escapeHtml(firstName)},</p>
+                  <p>${escapeHtml(advisorCompany)} marked you as inactive on ${escapeHtml(dealTitle)} which means you have not communicated further on this deal. We have moved this deal to your Passed folder. If this is an error, you can click on Reactivate on this deal from your Passed dashboard.</p>
+                  ${emailButton('Open Passed Dashboard', dashboardUrl)}
+                  <p>Feel free to reply to this email if you need further assistance.</p>
+                `,
+                true,
+              );
+
+              return this.mailService.sendEmailWithLogging(
+                recipient.email,
+                'buyer',
+                subject,
+                htmlBody,
+                [ILLUSTRATION_ATTACHMENT],
+                dealId,
+              );
+            }),
+          );
+        }
+      }
+    } catch (emailError) {
+      this.logger.error(`Failed to send flagged-inactive email to buyer ${buyerId} for deal ${dealId}`, this.formatError(emailError));
+    }
+
+    return savedDeal;
   }
 
   async getAllCompletedDeals(): Promise<Deal[]> {
@@ -2725,8 +3460,13 @@ export class DealsService {
 
   async getBuyerEngagementDashboard(sellerId: string): Promise<any> {
     try {
-      const deals = await this.dealModel.find({ seller: sellerId }).exec();
-      const dealIds = deals.map((deal) => deal._id);
+      const deals = await this.dealModel
+        .find({ seller: sellerId })
+        .select('_id')
+        .limit(10000)
+        .lean()
+        .exec();
+      const dealIds = deals.map((deal: any) => deal._id);
 
       const dealTrackingModel = this.dealModel.db.model('DealTracking');
 
@@ -2894,13 +3634,105 @@ export class DealsService {
       totalSellers: number;
     };
   }> {
+    // Cache per unique filter+page combo for 30s. Dashboard fires 4 sequential
+    // calls (one per status bucket); each is cached so tab-switches and refetches
+    // are free, and React Query refetchInterval becomes almost cost-free.
+    // Skip cache for search (user-typed, high cardinality) to avoid pollution.
+    if (!filters.search) {
+      const cacheKey = `admin:deals:${JSON.stringify(filters)}:p${page}:l${limit}`;
+      return cached(cacheKey, 30_000, () => this.findAllAdminOptimizedUncached(filters, page, limit));
+    }
+    return this.findAllAdminOptimizedUncached(filters, page, limit);
+  }
+
+  async getAdminTabCounts(search: string = ''): Promise<{
+    active: number;
+    offMarket: number;
+    allDeals: number;
+    loi: number;
+  }> {
+    const baseMatch: any = {};
+
+    if (search) {
+      const searchRegex = new RegExp(escapeRegexInput(search), 'i');
+      baseMatch.$or = [
+        { title: searchRegex },
+        { companyDescription: searchRegex },
+        { industrySector: searchRegex },
+      ];
+    }
+
+    const [result] = await this.dealModel.aggregate([
+      { $match: baseMatch },
+      {
+        $facet: {
+          active: [
+            {
+              $match: {
+                status: { $nin: ['completed', 'loi'] },
+                $expr: {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $objectToArray: '$invitationStatus' },
+                          as: 'item',
+                          cond: { $eq: ['$$item.v.response', 'accepted'] },
+                        },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+            { $count: 'count' },
+          ],
+          offMarket: [{ $match: { status: 'completed' } }, { $count: 'count' }],
+          allDeals: [{ $match: { status: { $ne: 'completed' } } }, { $count: 'count' }],
+          loi: [{ $match: { status: 'loi' } }, { $count: 'count' }],
+        },
+      },
+    ]).exec();
+
+    return {
+      active: result?.active?.[0]?.count || 0,
+      offMarket: result?.offMarket?.[0]?.count || 0,
+      allDeals: result?.allDeals?.[0]?.count || 0,
+      loi: result?.loi?.[0]?.count || 0,
+    };
+  }
+
+  private async findAllAdminOptimizedUncached(
+    filters: {
+      search?: string;
+      buyerResponse?: string;
+      status?: string;
+      isPublic?: string;
+      excludeStatus?: string;
+    } = {},
+    page: number = 1,
+    limit: number = 10
+  ): Promise<{
+    data: any[];
+    total: number;
+    page: number;
+    lastPage: number;
+    stats: {
+      totalDeals: number;
+      activeDeals: number;
+      completedDeals: number;
+      totalBuyers: number;
+      totalSellers: number;
+    };
+  }> {
     const skip = (page - 1) * limit;
 
     // Build match stage
     const matchStage: any = {};
 
     if (filters.search) {
-      const searchRegex = new RegExp(filters.search, 'i');
+      const searchRegex = new RegExp(escapeRegexInput(filters.search), 'i');
       matchStage.$or = [
         { title: searchRegex },
         { companyDescription: searchRegex },
@@ -2956,7 +3788,22 @@ export class DealsService {
             {
               $lookup: {
                 from: 'sellers',
-                let: { sellerId: { $toObjectId: '$seller' } },
+                let: {
+                  sellerId: {
+                    $cond: [
+                      { $eq: [{ $type: '$seller' }, 'objectId'] },
+                      '$seller',
+                      {
+                        $convert: {
+                          input: '$seller',
+                          to: 'objectId',
+                          onError: null,
+                          onNull: null,
+                        },
+                      },
+                    ],
+                  },
+                },
                 pipeline: [
                   { $match: { $expr: { $eq: ['$_id', '$$sellerId'] } } },
                   {
@@ -2975,6 +3822,83 @@ export class DealsService {
               },
             },
             { $unwind: { path: '$sellerProfile', preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: 'dealtrackings',
+                let: { dealId: '$_id' },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $and: [
+                          { $eq: ['$deal', '$$dealId'] },
+                          { $eq: ['$interactionType', 'completed'] },
+                        ],
+                      },
+                    },
+                  },
+                  { $sort: { timestamp: -1 } },
+                  { $limit: 1 },
+                  {
+                    $project: {
+                      _id: 0,
+                      buyerFromCIM: '$metadata.buyerFromCIM',
+                      winningBuyerId: '$metadata.winningBuyerId',
+                    },
+                  },
+                ],
+                as: 'completionTracking',
+              },
+            },
+            {
+              $addFields: {
+                closedWithBuyer: {
+                  $ifNull: [
+                    '$closedWithBuyer',
+                    {
+                      $convert: {
+                        input: { $arrayElemAt: ['$completionTracking.winningBuyerId', 0] },
+                        to: 'objectId',
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                  ],
+                },
+                closedWithCimAmplify: {
+                  $ifNull: [
+                    '$closedWithCimAmplify',
+                    {
+                      $or: [
+                        { $eq: [{ $arrayElemAt: ['$completionTracking.buyerFromCIM', 0] }, true] },
+                        {
+                          $gt: [
+                            {
+                              $strLenCP: {
+                                $ifNull: [
+                                  {
+                                    $convert: {
+                                      input: '$closedWithBuyer',
+                                      to: 'string',
+                                      onError: '',
+                                      onNull: '',
+                                    },
+                                  },
+                                  '',
+                                ],
+                              },
+                            },
+                            0,
+                          ],
+                        },
+                        { $gt: [{ $strLenCP: { $ifNull: ['$closedWithBuyerCompany', ''] } }, 0] },
+                        { $gt: [{ $strLenCP: { $ifNull: ['$closedWithBuyerEmail', ''] } }, 0] },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
             // Calculate buyer status summary from invitationStatus
             {
               $addFields: {
@@ -3021,7 +3945,7 @@ export class DealsService {
               },
             },
             // Clean up temporary fields
-            { $project: { invitationStatusArray: 0 } },
+            { $project: { invitationStatusArray: 0, completionTracking: 0 } },
           ],
           // Get total count
           totalCount: [{ $count: 'count' }],
@@ -3034,14 +3958,19 @@ export class DealsService {
     const data = result?.data || [];
     const total = result?.totalCount?.[0]?.count || 0;
 
-    // Get global stats in parallel (cached for performance)
-    const [totalDeals, activeDeals, completedDeals, totalBuyers, totalSellers] = await Promise.all([
-      this.dealModel.countDocuments({}).exec(),
-      this.dealModel.countDocuments({ status: { $ne: 'completed' } }).exec(),
-      this.dealModel.countDocuments({ status: 'completed' }).exec(),
-      this.buyerModel.countDocuments({}).exec(),
-      this.sellerModel.countDocuments({}).exec(),
-    ]);
+    // Global stats change slowly — cache for 60s so 4+ sequential admin calls
+    // share a single Mongo round-trip block instead of 5 × N.
+    const { totalDeals, activeDeals, completedDeals, totalBuyers, totalSellers } =
+      await cached('admin:global-counts', 60_000, async () => {
+        const [td, ad, cd, tb, ts] = await Promise.all([
+          this.dealModel.countDocuments({}).exec(),
+          this.dealModel.countDocuments({ status: { $ne: 'completed' } }).exec(),
+          this.dealModel.countDocuments({ status: 'completed' }).exec(),
+          this.buyerModel.countDocuments({}).exec(),
+          this.sellerModel.countDocuments({}).exec(),
+        ]);
+        return { totalDeals: td, activeDeals: ad, completedDeals: cd, totalBuyers: tb, totalSellers: ts };
+      });
 
     return {
       data,
@@ -3071,11 +4000,58 @@ export class DealsService {
     dealsThisMonth: number;
     dealsLastMonth: number;
     marketplaceDeals: number;
+    dealsPreviousWeek: number;
+    buyersPreviousWeek: number;
+    dealsCurrentWeek: number;
+    buyersCurrentWeek: number;
+    previousWeekStart: string;
+    previousWeekEnd: string;
+    currentWeekStart: string;
+    activeRevenueSize: number;
+    activeEbitdaSize: number;
+    totalRevenueSize: number;
+    totalEbitdaSize: number;
+    totalInvitations: number;
+    buyerResponseSummary: {
+      accepted: number;
+      pending: number;
+      rejected: number;
+      totalInvitations: number;
+    };
+    rewardLevelBreakdown: {
+      seed: number;
+      bloom: number;
+      fruit: number;
+    };
+    dealValueDistribution: Array<{ name: string; deals: number }>;
+    dealsTrendLast6Months: Array<{ month: string; deals: number }>;
+    buyerReferralSources: Array<{ name: string; value: number }>;
+    sellerReferralSources: Array<{ name: string; value: number }>;
+    industryBreakdown: Array<{ name: string; value: number }>;
   }> {
+    // This method fires ~21 parallel queries (countDocuments + aggregations).
+    // Cache 60s — dashboard stats don't need second-level accuracy.
+    return cached('admin:dashboard-stats', 60_000, () => this.computeAdminDashboardStats());
+  }
+
+  private async computeAdminDashboardStats(): Promise<any> {
+    const getStartOfWeekMonday = (date: Date): Date => {
+      const d = new Date(date);
+      d.setHours(0, 0, 0, 0);
+      const day = (d.getDay() + 6) % 7; // Monday=0 ... Sunday=6
+      d.setDate(d.getDate() - day);
+      return d;
+    };
+
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+    const startOfCurrentWeek = getStartOfWeekMonday(now);
+    const startOfPreviousWeek = new Date(startOfCurrentWeek);
+    startOfPreviousWeek.setDate(startOfPreviousWeek.getDate() - 7);
+    const endOfPreviousWeek = new Date(startOfCurrentWeek);
+    endOfPreviousWeek.setDate(endOfPreviousWeek.getDate() - 1);
 
     const [
       totalDeals,
@@ -3087,9 +4063,25 @@ export class DealsService {
       dealsThisMonth,
       dealsLastMonth,
       marketplaceDeals,
+      dealsPreviousWeek,
+      buyersPreviousWeek,
+      dealsCurrentWeek,
+      buyersCurrentWeek,
+      activeRevenueAgg,
+      activeEbitdaAgg,
+      revenueAgg,
+      ebitdaAgg,
+      invitationsAgg,
+      buyerResponseAgg,
+      rewardLevelAgg,
+      dealValueDistributionAgg,
+      dealsTrendAgg,
+      buyerReferralSourcesAgg,
+      sellerReferralSourcesAgg,
+      industryBreakdownAgg,
     ] = await Promise.all([
       this.dealModel.countDocuments({}).exec(),
-      this.dealModel.countDocuments({ status: { $nin: ['completed', 'loi'] } }).exec(),
+      this.dealModel.countDocuments({ status: 'active' }).exec(),
       this.dealModel.countDocuments({ status: 'completed' }).exec(),
       this.dealModel.countDocuments({ status: 'loi' }).exec(),
       this.buyerModel.countDocuments({}).exec(),
@@ -3098,8 +4090,230 @@ export class DealsService {
       this.dealModel.countDocuments({
         createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
       }).exec(),
-      this.dealModel.countDocuments({ isPublic: true, status: 'active' }).exec(),
+      // Public marketplace listings that are still open (not completed/off-market)
+      this.dealModel.countDocuments({ isPublic: true, status: { $ne: 'completed' } }).exec(),
+      this.dealModel.countDocuments({
+        createdAt: { $gte: startOfPreviousWeek, $lt: startOfCurrentWeek },
+      }).exec(),
+      this.buyerModel.countDocuments({
+        createdAt: { $gte: startOfPreviousWeek, $lt: startOfCurrentWeek },
+      }).exec(),
+      this.dealModel.countDocuments({
+        createdAt: { $gte: startOfCurrentWeek },
+      }).exec(),
+      this.buyerModel.countDocuments({
+        createdAt: { $gte: startOfCurrentWeek },
+      }).exec(),
+      // Active deals financial totals
+      this.dealModel.aggregate([
+        { $match: { status: 'active' } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$financialDetails.trailingRevenueAmount', 0] } } } },
+      ]).exec(),
+      this.dealModel.aggregate([
+        { $match: { status: 'active' } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$financialDetails.trailingEBITDAAmount', 0] } } } },
+      ]).exec(),
+      // System-wide totals across all deals
+      this.dealModel.aggregate([
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$financialDetails.trailingRevenueAmount', 0] } } } },
+      ]).exec(),
+      this.dealModel.aggregate([
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$financialDetails.trailingEBITDAAmount', 0] } } } },
+      ]).exec(),
+      this.dealModel.aggregate([
+        { $project: { targetedCount: { $size: { $ifNull: ['$targetedBuyers', []] } } } },
+        { $group: { _id: null, total: { $sum: '$targetedCount' } } },
+      ]).exec(),
+      this.dealModel.aggregate([
+        { $project: { invitationEntries: { $objectToArray: { $ifNull: ['$invitationStatus', {}] } } } },
+        { $unwind: { path: '$invitationEntries', preserveNullAndEmptyArrays: false } },
+        {
+          $group: {
+            _id: null,
+            accepted: {
+              $sum: { $cond: [{ $eq: ['$invitationEntries.v.response', 'accepted'] }, 1, 0] },
+            },
+            pending: {
+              $sum: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ['$invitationEntries.v.response', 'pending'] },
+                      { $eq: ['$invitationEntries.v.response', 'requested'] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+            rejected: {
+              $sum: { $cond: [{ $eq: ['$invitationEntries.v.response', 'rejected'] }, 1, 0] },
+            },
+          },
+        },
+      ]).exec(),
+      this.dealModel.aggregate([
+        { $project: { rewardLower: { $toLower: { $ifNull: ['$rewardLevel', ''] } } } },
+        {
+          $group: {
+            _id: null,
+            seed: { $sum: { $cond: [{ $eq: ['$rewardLower', 'seed'] }, 1, 0] } },
+            bloom: { $sum: { $cond: [{ $eq: ['$rewardLower', 'bloom'] }, 1, 0] } },
+            fruit: { $sum: { $cond: [{ $eq: ['$rewardLower', 'fruit'] }, 1, 0] } },
+          },
+        },
+      ]).exec(),
+      this.dealModel.aggregate([
+        { $project: { askingPrice: { $ifNull: ['$financialDetails.askingPrice', 0] } } },
+        {
+          $bucket: {
+            groupBy: '$askingPrice',
+            boundaries: [0, 1000000, 5000000, 10000000, 50000000, Number.MAX_VALUE],
+            default: 'other',
+            output: { count: { $sum: 1 } },
+          },
+        },
+      ]).exec(),
+      this.dealModel.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: '$createdAt' },
+              month: { $month: '$createdAt' },
+            },
+            deals: { $sum: 1 },
+          },
+        },
+      ]).exec(),
+      this.buyerModel.aggregate([
+        {
+          $project: {
+            normalizedSource: {
+              $trim: { input: { $ifNull: ['$referralSource', ''] } },
+            },
+          },
+        },
+        {
+          $project: {
+            source: {
+              $cond: [
+                { $eq: ['$normalizedSource', ''] },
+                'Unknown',
+                '$normalizedSource',
+              ],
+            },
+          },
+        },
+        { $group: { _id: '$source', value: { $sum: 1 } } },
+        { $project: { _id: 0, name: '$_id', value: 1 } },
+        { $sort: { value: -1, name: 1 } },
+      ]).exec(),
+      this.sellerModel.aggregate([
+        {
+          $project: {
+            normalizedSource: {
+              $trim: { input: { $ifNull: ['$referralSource', ''] } },
+            },
+          },
+        },
+        {
+          $project: {
+            source: {
+              $cond: [
+                { $eq: ['$normalizedSource', ''] },
+                'Unknown',
+                '$normalizedSource',
+              ],
+            },
+          },
+        },
+        { $group: { _id: '$source', value: { $sum: 1 } } },
+        { $project: { _id: 0, name: '$_id', value: 1 } },
+        { $sort: { value: -1, name: 1 } },
+      ]).exec(),
+      this.dealModel.aggregate([
+        {
+          $project: {
+            industries: {
+              $cond: [
+                {
+                  $and: [
+                    { $isArray: '$industrySectors' },
+                    { $gt: [{ $size: '$industrySectors' }, 0] },
+                  ],
+                },
+                '$industrySectors',
+                {
+                  $cond: [
+                    { $and: [{ $ne: [{ $ifNull: ['$industrySector', ''] }, ''] }] },
+                    ['$industrySector'],
+                    ['Unknown'],
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        { $unwind: '$industries' },
+        {
+          $project: {
+            industry: { $trim: { input: '$industries' } },
+          },
+        },
+        {
+          $match: { industry: { $ne: '' } },
+        },
+        { $group: { _id: '$industry', value: { $sum: 1 } } },
+        { $project: { _id: 0, name: '$_id', value: 1 } },
+        { $sort: { value: -1, name: 1 } },
+      ]).exec(),
     ]);
+
+    const totalInvitationsAllDeals = invitationsAgg?.[0]?.total || 0;
+    const buyerResponseSummary = {
+      accepted: buyerResponseAgg?.[0]?.accepted || 0,
+      pending: buyerResponseAgg?.[0]?.pending || 0,
+      rejected: buyerResponseAgg?.[0]?.rejected || 0,
+      totalInvitations: totalInvitationsAllDeals,
+    };
+
+    const rewardLevelBreakdown = {
+      seed: rewardLevelAgg?.[0]?.seed || 0,
+      bloom: rewardLevelAgg?.[0]?.bloom || 0,
+      fruit: rewardLevelAgg?.[0]?.fruit || 0,
+    };
+
+    const valueBucketMap = new Map<string, number>(
+      (dealValueDistributionAgg || []).map((row: any) => [String(row?._id), Number(row?.count || 0)]),
+    );
+    const dealValueDistribution = [
+      { name: '<$1M', deals: valueBucketMap.get('0') || 0 },
+      { name: '$1M-$5M', deals: valueBucketMap.get('1000000') || 0 },
+      { name: '$5M-$10M', deals: valueBucketMap.get('5000000') || 0 },
+      { name: '$10M-$50M', deals: valueBucketMap.get('10000000') || 0 },
+      { name: '>$50M', deals: valueBucketMap.get('50000000') || 0 },
+    ];
+
+    const trendMap = new Map<string, number>(
+      (dealsTrendAgg || []).map((row: any) => [
+        `${row?._id?.year}-${String(row?._id?.month).padStart(2, '0')}`,
+        Number(row?.deals || 0),
+      ]),
+    );
+    const dealsTrendLast6Months = Array.from({ length: 6 }, (_, idx) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - idx), 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return {
+        month: d.toLocaleDateString('en-US', { month: 'short' }),
+        deals: trendMap.get(key) || 0,
+      };
+    });
 
     return {
       totalDeals,
@@ -3111,6 +4325,25 @@ export class DealsService {
       dealsThisMonth,
       dealsLastMonth,
       marketplaceDeals,
+      dealsPreviousWeek,
+      buyersPreviousWeek,
+      dealsCurrentWeek,
+      buyersCurrentWeek,
+      previousWeekStart: startOfPreviousWeek.toISOString(),
+      previousWeekEnd: endOfPreviousWeek.toISOString(),
+      currentWeekStart: startOfCurrentWeek.toISOString(),
+      activeRevenueSize: activeRevenueAgg?.[0]?.total || 0,
+      activeEbitdaSize: activeEbitdaAgg?.[0]?.total || 0,
+      totalRevenueSize: revenueAgg?.[0]?.total || 0,
+      totalEbitdaSize: ebitdaAgg?.[0]?.total || 0,
+      totalInvitations: totalInvitationsAllDeals,
+      buyerResponseSummary,
+      rewardLevelBreakdown,
+      dealValueDistribution,
+      dealsTrendLast6Months,
+      buyerReferralSources: buyerReferralSourcesAgg,
+      sellerReferralSources: sellerReferralSourcesAgg,
+      industryBreakdown: industryBreakdownAgg,
     };
   }
 
@@ -3121,6 +4354,7 @@ export class DealsService {
     dealId: string,
     userId: string,
     userRole?: string,
+    loiBuyerId?: string,
   ): Promise<Deal> {
     const dealDoc = await this.dealModel.findById(dealId).exec();
     if (!dealDoc) {
@@ -3138,6 +4372,24 @@ export class DealsService {
     }
 
     dealDoc.status = DealStatus.LOI;
+
+    if (loiBuyerId) {
+      const everActiveBuyerIds = (dealDoc.everActiveBuyers || []).map((id) => id.toString());
+      if (!everActiveBuyerIds.includes(loiBuyerId)) {
+        throw new BadRequestException("Selected LOI buyer is not associated with this deal.");
+      }
+      const loiBuyer = await this.buyerModel.findById(loiBuyerId).lean();
+      if (!loiBuyer) {
+        throw new BadRequestException("Selected LOI buyer was not found");
+      }
+      dealDoc.loiWithBuyer = loiBuyerId;
+      dealDoc.loiWithBuyerCompany = (loiBuyer as any).companyName || "";
+      dealDoc.loiWithBuyerEmail = (loiBuyer as any).email || "";
+    } else {
+      dealDoc.loiWithBuyer = undefined as any;
+      dealDoc.loiWithBuyerCompany = undefined as any;
+      dealDoc.loiWithBuyerEmail = undefined as any;
+    }
 
     // Ensure timeline object exists
     if (!dealDoc.timeline || typeof dealDoc.timeline !== 'object') {
@@ -3157,12 +4409,12 @@ export class DealsService {
     }
 
     const savedDeal = await dealDoc.save();
+    await this.syncBuyerDealCountsForDeal(dealDoc as DealDocument);
 
     // Send LOI pause email notifications
     try {
       const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
       const seller = await this.sellerModel.findById(dealDoc.seller).exec();
-
       // Get active and pending buyers (those with 'accepted' or 'pending' invitation status)
       const activeBuyerIds: string[] = [];
       const pendingBuyerIds: string[] = [];
@@ -3182,32 +4434,32 @@ export class DealsService {
         }
       }
 
-      // Fetch active buyers info
-      const activeBuyers: { fullName: string; companyName: string; email: string }[] = [];
-      for (const buyerId of activeBuyerIds) {
-        const buyer = await this.buyerModel.findById(buyerId).exec();
-        if (buyer) {
-          activeBuyers.push({
-            fullName: buyer.fullName,
-            companyName: buyer.companyName,
-            email: buyer.email,
-          });
-        }
+      // Single batched fetch for both active and pending buyers — avoids the
+      // previous N+1 (one findById per buyer id, ~200 queries on a 100-buyer
+      // deal). Build a Map keyed by buyer _id, then group results.
+      const allBuyerIds = Array.from(new Set([...activeBuyerIds, ...pendingBuyerIds]));
+      const buyerDocs = allBuyerIds.length > 0
+        ? await this.buyerModel
+            .find({ _id: { $in: allBuyerIds } })
+            .select('fullName companyName email')
+            .lean()
+            .exec()
+        : [];
+      const buyerById = new Map<string, { fullName: string; companyName: string; email: string }>();
+      for (const b of buyerDocs) {
+        buyerById.set(String(b._id), {
+          fullName: (b as any).fullName,
+          companyName: (b as any).companyName,
+          email: (b as any).email,
+        });
       }
 
-      // Fetch pending buyers info
-      const pendingBuyers: { fullName: string; companyName: string; email: string }[] = [];
-      for (const buyerId of pendingBuyerIds) {
-        const buyer = await this.buyerModel.findById(buyerId).exec();
-        if (buyer) {
-          pendingBuyers.push({
-            fullName: buyer.fullName,
-            companyName: buyer.companyName,
-            email: buyer.email,
-          });
-        }
-      }
-
+      const activeBuyers = activeBuyerIds
+        .map((id) => buyerById.get(String(id)))
+        .filter((b): b is { fullName: string; companyName: string; email: string } => !!b);
+      const pendingBuyers = pendingBuyerIds
+        .map((id) => buyerById.get(String(id)))
+        .filter((b): b is { fullName: string; companyName: string; email: string } => !!b);
       // Build active buyers list HTML for project owner
       const activeBuyersHtml = activeBuyers.length > 0
         ? `<p><strong>Active Buyers (${activeBuyers.length}):</strong></p>
@@ -3223,6 +4475,10 @@ export class DealsService {
              ${pendingBuyers.map(b => `<li style="margin-bottom: 4px;"><strong>${b.fullName}</strong> - ${b.companyName} (${b.email})</li>`).join('')}
            </ul>`
         : `<p><strong>Pending Buyers:</strong> None</p>`;
+      // Build LOI buyer info for project owner email
+      const loiBuyerHtml = dealDoc.loiWithBuyer
+        ? `<p><strong>LOI Buyer (CIM Amplify):</strong> ${dealDoc.loiWithBuyerCompany || 'N/A'} (${dealDoc.loiWithBuyerEmail || 'N/A'})</p>`
+        : `<p><strong>LOI Buyer:</strong> Not from CIM Amplify</p>`;
 
       // Email to Project Owner
       const ownerSubject = `Deal Paused for LOI: ${dealDoc.title}`;
@@ -3231,11 +4487,12 @@ export class DealsService {
         <p><strong>Deal:</strong> ${dealDoc.title}</p>
         <p><strong>Seller:</strong> ${seller?.fullName || 'Unknown'} (${seller?.companyName || 'N/A'})</p>
         <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
+        ${loiBuyerHtml}
         ${activeBuyersHtml}
         ${pendingBuyersHtml}
       `);
       await this.mailService.sendEmailWithLogging(
-        'canotifications@amp-ven.com',
+        getAdminNotificationEmail(),
         'admin',
         ownerSubject,
         ownerHtmlBody,
@@ -3246,17 +4503,16 @@ export class DealsService {
       // Email to Advisor (Seller)
       if (seller) {
         const advisorSubject = `Your Deal Has Been Paused for LOI`;
-        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+        const advisorContent = `
           <p>Your deal <strong>${dealDoc.title}</strong> has been paused for Letter of Intent (LOI) negotiations.</p>
           <p>While your deal is paused, it will not be visible to new buyers on the marketplace. Existing active buyers have been notified about this status change.</p>
           <p>When you are ready to make the deal active again, you can revive it from your LOI Deals dashboard. If the deal does sell please click Off Market and let us know the details of the sale.</p>
-          ${emailButton('View LOI Deals', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/seller/loi-deals`)}
-        `);
-        await this.mailService.sendEmailWithLogging(
-          seller.email,
-          'seller',
+          ${emailButton('View LOI Deals', `${getFrontendUrl()}/seller/loi-deals`)}
+        `;
+        await this.sendSellerDealEmail(
+          seller,
           advisorSubject,
-          advisorHtmlBody,
+          advisorContent,
           [ILLUSTRATION_ATTACHMENT],
           dealIdStr,
         );
@@ -3265,11 +4521,11 @@ export class DealsService {
       // Email to Active Buyers (reuse already fetched buyer data)
       for (const buyer of activeBuyers) {
         const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
           <p>The deal <strong>${dealDoc.title}</strong> has been paused by the advisor for Letter of Intent (LOI) negotiations.</p>
           <p>This means the advisor is currently in advanced discussions with a potential buyer. The deal will remain in your Active deals, and you will be notified if it becomes available again.</p>
           <p>In the meantime, feel free to explore other opportunities on CIM Amplify.</p>
-          ${emailButton('Browse Marketplace', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/buyer/marketplace`)}
+          ${emailButton('Browse Marketplace', `${getFrontendUrl()}/buyer/marketplace`)}
         `);
         await this.mailService.sendEmailWithLogging(
           buyer.email,
@@ -3284,10 +4540,10 @@ export class DealsService {
       // Email to Pending Buyers - give them FOMO to encourage faster response next time
       for (const buyer of pendingBuyers) {
         const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
           <p>One of your Pending Deals has gone under LOI before you had a chance to respond. This deal will remain in your Pending Deals until it either becomes active again or is taken off market.</p>
           <p>Please remember that you need to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
-          ${emailButton('See Pending Deals', `${process.env.FRONTEND_URL}/buyer/deals`)}
+          ${emailButton('See Pending Deals', `${getFrontendUrl()}/buyer/deals`)}
         `);
         await this.mailService.sendEmailWithLogging(
           buyer.email,
@@ -3299,7 +4555,7 @@ export class DealsService {
         );
       }
     } catch (emailError) {
-      // Log email error but don't fail the LOI operation
+      this.logger.error(`Failed sending LOI pause emails for deal ${dealId}`, this.formatError(emailError));
     }
 
     return savedDeal;
@@ -3338,6 +4594,7 @@ export class DealsService {
     dealDoc.markModified('timeline');
 
     const savedDeal = await dealDoc.save();
+    await this.syncBuyerDealCountsForDeal(dealDoc as DealDocument);
 
     // Send LOI revive email notifications
     try {
@@ -3417,7 +4674,7 @@ export class DealsService {
         ${pendingBuyersHtml}
       `);
       await this.mailService.sendEmailWithLogging(
-        'canotifications@amp-ven.com',
+        getAdminNotificationEmail(),
         'admin',
         ownerSubject,
         ownerHtmlBody,
@@ -3428,17 +4685,16 @@ export class DealsService {
       // Email to Advisor (Seller)
       if (seller) {
         const advisorSubject = `Your Deal Is Now Active Again`;
-        const advisorHtmlBody = genericEmailTemplate(advisorSubject, seller.fullName.split(' ')[0], `
+        const advisorContent = `
           <p>Your deal <strong>${dealDoc.title}</strong> has been revived and is now active again on CIM Amplify.</p>
           <p>Your deal is now visible on the marketplace, and existing active and pending buyers have been notified that the deal is available again.</p>
           <p>You can manage your deal and view interested buyers from your dashboard.</p>
-          ${emailButton('View Dashboard', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/seller/dashboard`)}
-        `);
-        await this.mailService.sendEmailWithLogging(
-          seller.email,
-          'seller',
+          ${emailButton('View Dashboard', `${getFrontendUrl()}/seller/dashboard`)}
+        `;
+        await this.sendSellerDealEmail(
+          seller,
           advisorSubject,
-          advisorHtmlBody,
+          advisorContent,
           [ILLUSTRATION_ATTACHMENT],
           dealIdStr,
         );
@@ -3447,11 +4703,11 @@ export class DealsService {
       // Email to Active Buyers (reuse already fetched buyer data)
       for (const buyer of activeBuyers) {
         const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
           <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
           <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to engage with the advisor if you're still interested.</p>
           <p>View the deal details and reach out to the advisor directly from your Active deals.</p>
-          ${emailButton('View Active Deals', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/buyer/deals`)}
+          ${emailButton('View Active Deals', `${getFrontendUrl()}/buyer/deals`)}
         `);
         await this.mailService.sendEmailWithLogging(
           buyer.email,
@@ -3466,11 +4722,11 @@ export class DealsService {
       // Email to Pending Buyers (reuse already fetched buyer data)
       for (const buyer of pendingBuyers) {
         const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, buyer.fullName.split(' ')[0], `
+        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
           <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
           <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to continue your interest in this deal.</p>
           <p>View your pending deals and respond to the invitation from the advisor.</p>
-          ${emailButton('View My Deals', `${process.env.FRONTEND_URL || 'https://app.cimamplify.com'}/buyer/deals`)}
+          ${emailButton('View My Deals', `${getFrontendUrl()}/buyer/deals`)}
         `);
         await this.mailService.sendEmailWithLogging(
           buyer.email,
@@ -3482,7 +4738,7 @@ export class DealsService {
         );
       }
     } catch (emailError) {
-      // Log email error but don't fail the revive operation
+      this.logger.error(`Failed sending LOI revive emails for deal ${dealId}`, this.formatError(emailError));
     }
 
     return savedDeal;
@@ -3499,5 +4755,267 @@ export class DealsService {
       })
       .sort({ 'timeline.updatedAt': -1 })
       .exec();
+  }
+
+  /**
+   * Validate a deal-action email token without consuming it.
+   * Used by public endpoints that need to read deal data scoped to a token
+   * (for example, fetching the buyer list before submitting an action).
+   */
+  private async validateEmailActionToken(token: string, ip?: string): Promise<DealActionTokenDocument> {
+    const actionToken = await this.dealActionTokenModel.findOne({ token }).exec();
+
+    if (!actionToken) {
+      this.logger.warn(`Invalid email action token attempt from IP: ${ip || 'unknown'}`);
+      throw new NotFoundException('This link is invalid or has expired.');
+    }
+
+    const hmacSecret = this.getHmacSecret();
+    const recipientId = actionToken.recipientRole === 'seller'
+      ? (actionToken.sellerId || '')
+      : (actionToken.buyerId || '');
+    const signaturePayload = actionToken.recipientRole === 'seller' && actionToken.buyerId
+      ? `${token}:${actionToken.dealId}:${recipientId}:${actionToken.buyerId}`
+      : `${token}:${actionToken.dealId}:${recipientId}`;
+    const expectedSignature = crypto.createHmac('sha256', hmacSecret)
+      .update(signaturePayload)
+      .digest('hex');
+
+    if (!crypto.timingSafeEqual(Buffer.from(actionToken.signature), Buffer.from(expectedSignature))) {
+      this.logger.warn(`HMAC signature mismatch for token from IP: ${ip || 'unknown'}`);
+      throw new BadRequestException('This link is invalid.');
+    }
+
+    if (actionToken.expiresAt < new Date()) {
+      throw new BadRequestException('This link has expired. Please log in to your dashboard to take action.');
+    }
+
+    return actionToken;
+  }
+
+  /**
+   * Public lookup of ever-active buyers for the deal referenced by an email
+   * action token. Used by the seller-action page to populate the buyer
+   * selection list for LOI / Off Market without requiring login.
+   */
+  async getEverActiveBuyersByActionToken(token: string, ip?: string): Promise<any[]> {
+    const actionToken = await this.validateEmailActionToken(token, ip);
+
+    if (actionToken.recipientRole !== 'seller') {
+      throw new BadRequestException('This link does not allow buyer selection.');
+    }
+
+    if (actionToken.used) {
+      return [];
+    }
+
+    return this.getEverActiveBuyers(actionToken.dealId);
+  }
+
+  /**
+   * Build the human-readable "already done" message for a used action token.
+   * Centralised so the GET /status endpoint and the POST handler agree, and
+   * so we can correctly disambiguate flag-inactive tokens from off-market
+   * ones — both used to be stored with actionTaken='completed', so we fall
+   * back to inspecting the token shape (buyerId presence on a seller token
+   * means it's a buyer-flag token).
+   */
+  private describePreviousAction(actionToken: DealActionTokenDocument): string {
+    const isLegacyFlagInactive =
+      actionToken.actionTaken === 'completed' &&
+      actionToken.recipientRole === 'seller' &&
+      !!actionToken.buyerId;
+
+    if (actionToken.actionTaken === 'flag-inactive' || isLegacyFlagInactive) {
+      return 'flagged this buyer as inactive on';
+    }
+    if (actionToken.actionTaken === 'active') return 'moved to Active';
+    if (actionToken.actionTaken === 'loi') return 'paused for LOI';
+    if (actionToken.actionTaken === 'completed') return 'taken off market';
+    if (actionToken.actionTaken === 'rejected') return 'passed on';
+    // Unknown / null — generic fallback.
+    return 'taken action on';
+  }
+
+  private buildAlreadyDoneMessage(actionToken: DealActionTokenDocument): string {
+    const verb = this.describePreviousAction(actionToken);
+    if (verb === 'flagged this buyer as inactive on') {
+      return 'You have already flagged this buyer as inactive on this deal.';
+    }
+    if (verb === 'taken action on') {
+      return 'You have already taken action on this deal.';
+    }
+    return `You have already ${verb} this deal.`;
+  }
+
+  /**
+   * Public token status lookup so the seller-action page can detect, on load,
+   * that a previously-used token should immediately show "already done"
+   * instead of re-prompting the user with the action dialog.
+   */
+  async getEmailActionTokenStatus(
+    token: string,
+    ip?: string,
+  ): Promise<{ used: boolean; actionTaken?: string; recipientRole?: string; message?: string }> {
+    const actionToken = await this.validateEmailActionToken(token, ip);
+
+    if (!actionToken.used) {
+      return { used: false, recipientRole: actionToken.recipientRole };
+    }
+
+    return {
+      used: true,
+      actionTaken: actionToken.actionTaken || undefined,
+      recipientRole: actionToken.recipientRole,
+      message: this.buildAlreadyDoneMessage(actionToken),
+    };
+  }
+
+  /**
+   * Handle a deal action from an email link using a token (no login required).
+   * Validates the token, performs the action, and marks the token as used.
+   */
+  async handleEmailAction(
+    token: string,
+    action: 'activate' | 'pass' | 'loi' | 'off-market' | 'flag-inactive',
+    ip?: string,
+    userAgent?: string,
+    payload: {
+      buyerFromCIM?: boolean;
+      winningBuyerId?: string;
+      loiBuyerId?: string;
+      finalSalePrice?: number;
+    } = {},
+  ): Promise<{ success: boolean; message: string; dealTitle?: string }> {
+    const actionToken = await this.validateEmailActionToken(token, ip);
+
+    if (actionToken.used) {
+      return {
+        success: true,
+        message: this.buildAlreadyDoneMessage(actionToken),
+      };
+    }
+
+    // Defensive payload validation. Email-action endpoints are public (no auth)
+    // so we cannot trust client-supplied fields beyond the HMAC-signed token.
+    const buyerFromCIMRaw = payload.buyerFromCIM;
+    if (buyerFromCIMRaw !== undefined && typeof buyerFromCIMRaw !== 'boolean') {
+      throw new BadRequestException('Invalid buyerFromCIM value.');
+    }
+    const buyerFromCIM = buyerFromCIMRaw === true;
+
+    let validatedFinalSalePrice: number | undefined;
+    if (payload.finalSalePrice !== undefined && payload.finalSalePrice !== null) {
+      const price = Number(payload.finalSalePrice);
+      // Cap at 1 trillion USD to prevent overflow / nonsense values.
+      if (!Number.isFinite(price) || price < 0 || price > 1_000_000_000_000) {
+        throw new BadRequestException('Invalid final sale price.');
+      }
+      validatedFinalSalePrice = price;
+    }
+
+    const candidateBuyerId = buyerFromCIM
+      ? (action === 'loi' ? payload.loiBuyerId : action === 'off-market' ? payload.winningBuyerId : undefined)
+      : undefined;
+    let validatedBuyerId: string | undefined;
+    if (candidateBuyerId !== undefined) {
+      if (typeof candidateBuyerId !== 'string' || !Types.ObjectId.isValid(candidateBuyerId)) {
+        throw new BadRequestException('Invalid buyer id.');
+      }
+      // Ensure the buyer was actually associated with this deal — prevents a
+      // valid-token holder from attributing the close to an arbitrary buyer.
+      const dealForBuyerCheck = await this.dealModel.findById(actionToken.dealId).select('everActiveBuyers').lean().exec();
+      const everActive = ((dealForBuyerCheck as any)?.everActiveBuyers || []).map((id: any) => String(id));
+      if (!everActive.includes(candidateBuyerId)) {
+        throw new BadRequestException('Selected buyer is not associated with this deal.');
+      }
+      validatedBuyerId = candidateBuyerId;
+    }
+
+    try {
+      let result: any;
+      let statusMessage = 'Action taken via email link';
+
+      if (actionToken.recipientRole === 'seller') {
+        if (!actionToken.sellerId) {
+          throw new BadRequestException('Invalid seller action token.');
+        }
+
+        if (action === 'loi') {
+          result = await this.moveDealToLOI(actionToken.dealId, actionToken.sellerId, 'seller', validatedBuyerId);
+          statusMessage = 'Deal paused for LOI via email link';
+        } else if (action === 'off-market') {
+          result = await this.closeDealseller(
+            actionToken.dealId,
+            actionToken.sellerId,
+            validatedFinalSalePrice,
+            'Action taken via email link',
+            validatedBuyerId,
+            'seller',
+            buyerFromCIMRaw === undefined ? undefined : buyerFromCIM,
+          );
+          statusMessage = 'Deal taken off market via email link';
+        } else if (action === 'flag-inactive') {
+          if (!actionToken.buyerId) {
+            throw new BadRequestException('Invalid buyer action token.');
+          }
+          result = await this.flagInterestedBuyerInactive(actionToken.dealId, actionToken.buyerId, 'seller');
+          statusMessage = 'Buyer flagged inactive via email link';
+        } else {
+          throw new BadRequestException("Invalid action for seller email link.");
+        }
+      } else {
+        if (!actionToken.buyerId) {
+          throw new BadRequestException('Invalid buyer action token.');
+        }
+
+        const status: 'active' | 'rejected' = action === 'activate' ? 'active' : 'rejected';
+        result = await this.updateDealStatusByBuyer(
+          actionToken.dealId,
+          actionToken.buyerId,
+          status,
+          statusMessage,
+        );
+      }
+
+      // Mark token as used and log request metadata
+      actionToken.used = true;
+      actionToken.actionTaken =
+        actionToken.recipientRole === 'seller'
+          ? (action === 'loi'
+              ? 'loi'
+              : action === 'flag-inactive'
+                ? 'flag-inactive'
+                : 'completed')
+          : (action === 'activate' ? 'active' : 'rejected');
+      actionToken.usedAt = new Date();
+      actionToken.usedFromIp = ip || null;
+      actionToken.usedUserAgent = userAgent || null;
+      await actionToken.save();
+
+      const dealTitle = result?.deal?.title || 'the deal';
+      const logRecipientId = actionToken.recipientRole === 'seller'
+        ? (actionToken.sellerId || '')
+        : (actionToken.buyerId || '');
+      this.logger.log(`Email action completed: ${actionToken.recipientRole}=${logRecipientId}, deal=${actionToken.dealId}, action=${action}, IP=${ip || 'unknown'}`);
+
+      return {
+        success: true,
+        message: actionToken.recipientRole === 'seller'
+          ? (action === 'loi'
+            ? 'Deal has been paused for LOI.'
+            : action === 'flag-inactive'
+              ? 'Buyer has been flagged inactive.'
+              : 'Deal has been taken off market.')
+          : '',
+        dealTitle,
+      };
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) {
+        throw error;
+      }
+      this.logger.error(`Failed to handle email action: ${this.formatError(error)}`);
+      throw new InternalServerErrorException('Something went wrong while processing your action. Please try again or log in to your dashboard.');
+    }
   }
 }

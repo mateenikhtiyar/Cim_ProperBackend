@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger"
-import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max } from "class-validator"
+import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max, ArrayMaxSize } from "class-validator"
 import { Type } from "class-transformer"
 import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
 import { FinancialDetailsDto, BusinessModelDto, ManagementPreferencesDto, BuyerFitDto, NdaDocumentDto } from "./create-deal.dto"
@@ -29,11 +29,6 @@ export class UpdateBuyerFitDto {
 }
 
 export class UpdateDealDto {
-  @ApiProperty({ description: "Title of the deal", example: "SaaS Company Acquisition Opportunity", required: false })
-  @IsString()
-  @IsOptional()
-  title?: string
-
   @ApiProperty({
     description: "Description of the company",
     example: "Established SaaS company with recurring revenue seeking acquisition.",
@@ -68,6 +63,13 @@ export class UpdateDealDto {
   @IsString()
   @IsOptional()
   industrySector?: string
+
+  @ApiProperty({ description: "Up to 3 industry sectors", type: [String], required: false })
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(3)
+  @IsOptional()
+  industrySectors?: string[]
 
   @ApiProperty({ description: "Geographic location/country of the company", example: "United States", required: false })
   @IsString()
@@ -133,6 +135,14 @@ export class UpdateDealDto {
   @IsOptional()
   isFeatured?: boolean
 
+  @ApiProperty({
+    description: "Whether buyer must pay a buy-side fee above CIM Amplify fees",
+    required: false,
+  })
+  @IsBoolean()
+  @IsOptional()
+  requiresBuyerFeeAboveAmplifyFees?: boolean
+
   @ApiProperty({ description: "Stake percentage being offered", example: 100, required: false })
   @IsNumber()
   @Min(1)
@@ -181,4 +191,9 @@ export class UpdateDealDto {
   @IsString()
   @IsOptional()
   closedWithBuyerEmail?: string;
+
+  @ApiProperty({ description: "Whether deal was closed with a CIM Amplify buyer", required: false })
+  @IsBoolean()
+  @IsOptional()
+  closedWithCimAmplify?: boolean;
 }

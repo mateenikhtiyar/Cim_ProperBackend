@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import axios from "axios";
 
 /**
  * Global HTTP Exception Filter
@@ -29,6 +30,18 @@ import { Request, Response } from 'express';
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
+  private async reportError(payload: Record<string, unknown>) {
+    const webhookUrl = process.env.ERROR_MONITORING_WEBHOOK_URL;
+    if (!webhookUrl) {
+      return;
+    }
+
+    try {
+      await axios.post(webhookUrl, payload, { timeout: 2000 });
+    } catch {
+      // Do not fail request path due to monitoring outage.
+    }
+  }
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -81,6 +94,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         `[${request.method}] ${request.url} - ${status} - ${JSON.stringify(message)}`,
         exception instanceof Error ? exception.stack : undefined,
       );
+      this.reportError({
+        level: "error",
+        status,
+        method: request.method,
+        url: request.url,
+        message,
+        stack: exception instanceof Error ? exception.stack : undefined,
+        timestamp: new Date().toISOString(),
+      });
     } else if (status >= 400) {
       // Log 4xx errors at warn level
       this.logger.warn(

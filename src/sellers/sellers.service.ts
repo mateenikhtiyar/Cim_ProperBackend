@@ -8,10 +8,17 @@ import * as bcrypt from "bcrypt";
 import { AuthService } from '../auth/auth.service';
 import { MailService, ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
 import { genericEmailTemplate } from '../mail/generic-email.template';
+import { getAdminNotificationEmail } from '../common/admin-notification-email';
+import { cached, cacheInvalidate } from '../common/memory-cache';
+
+const escapeRegexInput = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 @Injectable()
 export class SellersService {
   private readonly logger = new Logger(SellersService.name);
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
 
   constructor(
     @InjectModel(Seller.name) private sellerModel: Model<SellerDocument>,
@@ -21,17 +28,18 @@ export class SellersService {
 
   async create(createSellerDto: RegisterSellerDto): Promise<Seller> {
     try {
-      const existingSeller = await this.sellerModel.findOne({ email: createSellerDto.email }).exec();
+      const normalizedEmail = this.normalizeEmail(createSellerDto.email);
+      const existingSeller = await this.sellerModel.findOne({ email: normalizedEmail }).exec();
       if (existingSeller) {
         throw new ConflictException('An account with this email already exists. Please try logging in instead.');
       }
       // Hash the password before saving
-      const hashedPassword = await bcrypt.hash(createSellerDto.password, 10);
+      const hashedPassword = await bcrypt.hash(createSellerDto.password, 12);
       const createdSeller = new this.sellerModel({
         ...createSellerDto,
+        email: normalizedEmail,
         password: hashedPassword,
         role: 'seller',
-        isEmailVerified: true, // Auto-verify since we removed email verification
       });
       const savedSeller = await createdSeller.save();
       // Send welcome email instead of verification email
@@ -50,7 +58,7 @@ export class SellersService {
       `);
 
       await this.mailService.sendEmailWithLogging(
-        "canotifications@amp-ven.com",
+        getAdminNotificationEmail(),
         "admin",
         ownerSubject,
         ownerHtmlBody,
@@ -65,16 +73,27 @@ export class SellersService {
   }
 
   async findAll(page: number = 1, limit: number = 10, search: string = '', sortBy: string = '', activeOnly: string = ''): Promise<any> {
+    if (!search) {
+      // 15s cache — below user perception, eliminates repeat DB hits from admin tables
+      // refreshing, pagination, and React Query refetches. No invalidation needed.
+      const key = `sellers:list:${page}:${limit}:${sortBy}:${activeOnly}`;
+      return cached(key, 15_000, () => this.findAllUncached(page, limit, search, sortBy, activeOnly));
+    }
+    return this.findAllUncached(page, limit, search, sortBy, activeOnly);
+  }
+
+  private async findAllUncached(page: number = 1, limit: number = 10, search: string = '', sortBy: string = '', activeOnly: string = ''): Promise<any> {
     try {
       const skip = (page - 1) * limit;
       
       // Build search query
-      const searchQuery = search ? {
+      const safeSearch = search ? escapeRegexInput(search) : '';
+      const searchQuery = safeSearch ? {
         $or: [
-          { fullName: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } },
-          { companyName: { $regex: search, $options: 'i' } },
-          { phoneNumber: { $regex: search, $options: 'i' } }
+          { fullName: { $regex: safeSearch, $options: 'i' } },
+          { email: { $regex: safeSearch, $options: 'i' } },
+          { companyName: { $regex: safeSearch, $options: 'i' } },
+          { phoneNumber: { $regex: safeSearch, $options: 'i' } }
         ]
       } : {};
 
@@ -98,7 +117,7 @@ export class SellersService {
         sortStage = { $sort: { sortKey: 1 as const, _id: 1 as const } };
       }
 
-      const pipeline: any[] = [
+      const basePipeline: any[] = [
         { $match: searchQuery },
         {
           $lookup: {
@@ -169,80 +188,44 @@ export class SellersService {
           }
         },
         ...(activeOnly && activeOnly.toLowerCase() === 'true' ? [{ $match: { activeDealsCount: { $gt: 0 } } }] : []),
-        sortStage,
-        { $skip: skip },
-        { $limit: limit },
-        {
-          $project: {
-            companyName: 1,
-            fullName: 1,
-            email: 1,
-            phoneNumber: 1,
-            website: 1,
-            title: 1,
-            role: 1,
-            profilePicture: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            activeDealsCount: 1,
-            offMarketDealsCount: 1,
-            loiDealsCount: 1,
-            allDealsCount: 1,
-            referralSource: 1,
-            isEmailVerified: 1,
-            isGoogleAccount: 1,
-            managementPreferences: 1
-          }
-        }
       ];
 
-      const sellers = await this.sellerModel.aggregate(pipeline).exec();
-      const totalPipeline: any[] = [
-        { $match: searchQuery },
+      const [result] = await this.sellerModel.aggregate([
+        ...basePipeline,
         {
-          $lookup: {
-            from: "deals",
-            localField: "_id",
-            foreignField: "seller",
-            as: "deals"
-          }
-        },
-        {
-          $addFields: {
-            activeDealsCount: {
-              $size: {
-                $filter: {
-                  input: "$deals",
-                  cond: {
-                    $and: [
-                      { $ne: ["$$this.status", "completed"] },
-                      { $ne: ["$$this.status", "loi"] },
-                      {
-                        $gt: [
-                          {
-                            $size: {
-                              $filter: {
-                                input: { $objectToArray: "$$this.invitationStatus" },
-                                as: "inv",
-                                cond: { $eq: ["$$inv.v.response", "accepted"] }
-                              }
-                            }
-                          },
-                          0
-                        ]
-                      }
-                    ]
-                  }
+          $facet: {
+            data: [
+              sortStage,
+              { $skip: skip },
+              { $limit: limit },
+              {
+                $project: {
+                  companyName: 1,
+                  fullName: 1,
+                  email: 1,
+                  phoneNumber: 1,
+                  website: 1,
+                  title: 1,
+                  role: 1,
+                  profilePicture: 1,
+                  createdAt: 1,
+                  updatedAt: 1,
+                  activeDealsCount: 1,
+                  offMarketDealsCount: 1,
+                  loiDealsCount: 1,
+                  allDealsCount: 1,
+                  referralSource: 1,
+                  managementPreferences: 1
                 }
               }
-            }
+            ],
+            totalCount: [{ $count: 'count' }]
           }
-        },
-        ...(activeOnly && activeOnly.toLowerCase() === 'true' ? [{ $match: { activeDealsCount: { $gt: 0 } } }] : []),
-        { $count: 'count' }
-      ];
-      const totalAgg = await this.sellerModel.aggregate(totalPipeline).exec();
-      const total = totalAgg.length > 0 ? (totalAgg[0] as any).count : 0;
+        }
+      ]).exec();
+
+      const sellers = result?.data || [];
+      const total = result?.totalCount?.[0]?.count || 0;
 
       return {
         data: sellers,
@@ -271,7 +254,7 @@ export class SellersService {
 
   async findByEmail(email: string): Promise<Seller | null> {
     try {
-      return await this.sellerModel.findOne({ email }).exec();
+      return await this.sellerModel.findOne({ email: this.normalizeEmail(email) }).exec();
     } catch (error) {
       this.logger.error(`Error finding seller by email ${email}: ${error.message}`, error.stack);
       throw error;
@@ -322,64 +305,38 @@ export class SellersService {
     }
   }
 
-  async createFromGoogle(profile: any): Promise<{ seller: Seller; isNewUser: boolean }> {
-    try {
-      const { email, name, picture, sub } = profile;
-      let seller = await this.sellerModel.findOne({
-        $or: [
-          { email: email },
-          { googleId: sub }
-        ]
-      }).exec();
-      let isNewUser = false;
-      if (seller) {
-        if (!seller.googleId) {
-          seller.googleId = sub;
-          seller.isGoogleAccount = true;
-          if (picture && !seller.profilePicture) {
-            seller.profilePicture = picture;
-          }
-          seller = await seller.save();
-        }
-      } else {
-        isNewUser = true;
-        const newSeller = new this.sellerModel({
-          email,
-          fullName: name,
-          companyName: "Set your company name",
-          password: Math.random().toString(36), // Set a random password (should be hashed if used)
-          googleId: sub,
-          isGoogleAccount: true,
-          role: "seller",
-          profilePicture: picture || null,
-        });
-        seller = await newSeller.save();
 
-        // Send notification email to canotifications@amp-ven.com for new advisors
-        const website = seller.website || 'Not provided';
-        const ownerSubject = `New Advisor ${seller.companyName}`;
-        const ownerHtmlBody = genericEmailTemplate(ownerSubject, "John", `
-          <p><b>Company Name</b>: ${seller.companyName}</p>
-          <p><b>Website</b>: ${website}</p>
-          <p><b>Main Contact</b>: ${seller.fullName}</p>
-          <p><b>Main Contact Email</b>: ${seller.email}</p>
-          <p><b>Main Contact Phone</b>: ${seller.phoneNumber || 'Not provided'}</p>
-          <p><b>Title</b>: ${seller.title || 'Not provided'}</p>
-          <p><b>Registration Method</b>: Google OAuth</p>
-        `);
-
-        await this.mailService.sendEmailWithLogging(
-          "canotifications@amp-ven.com",
-          "admin",
-          ownerSubject,
-          ownerHtmlBody,
-          [ILLUSTRATION_ATTACHMENT],
-        );
-      }
-      return { seller, isNewUser };
-    } catch (error) {
-      this.logger.error(`Failed to create seller from Google: ${error.message}`, error.stack);
-      throw new Error("Failed to create seller from Google account");
+  async getPublicSellersByIds(sellerIds: string[]): Promise<Array<{
+    id: string;
+    fullName: string;
+    companyName: string;
+    profilePicture: string | null;
+    email: string;
+    phoneNumber: string;
+    role: string;
+    website: string;
+  }>> {
+    const uniqueIds = Array.from(new Set(sellerIds.filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      return [];
     }
+
+    const sellers = await this.sellerModel
+      .find({ _id: { $in: uniqueIds } })
+      .select("fullName companyName profilePicture email phoneNumber role website")
+      .lean()
+      .exec();
+
+    return sellers.map((seller: any) => ({
+      id: seller._id?.toString?.() || String(seller._id),
+      fullName: seller.fullName || "N/A",
+      companyName: seller.companyName || "N/A",
+      profilePicture: seller.profilePicture || null,
+      email: seller.email || "N/A",
+      phoneNumber: seller.phoneNumber || "N/A",
+      role: seller.role || "seller",
+      website: seller.website || "N/A",
+    }));
   }
 }
+

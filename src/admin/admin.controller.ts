@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, UseGuards, Request, Param, Delete, Patch, Query } from "@nestjs/common"
+import { Controller, Get, Post, Body, UseGuards, Request, Param, Delete, Patch, Query, Logger } from "@nestjs/common"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
@@ -11,6 +11,7 @@ import { UpdateCompanyProfileDto } from "../company-profile/dto/update-company-p
 import { UnauthorizedException } from "@nestjs/common"
 import { SellersService } from "../sellers/sellers.service"
 import { UpdateSellerDto } from "../sellers/dto/update-seller.dto"
+import { Throttle } from "@nestjs/throttler"
 
 interface RequestWithUser extends Request {
   user: {
@@ -23,6 +24,8 @@ interface RequestWithUser extends Request {
 @ApiTags("admin")
 @Controller("admin")
 export class AdminController {
+  private readonly logger = new Logger(AdminController.name);
+
   constructor(
     private readonly adminService: AdminService,
     private readonly companyProfileService: CompanyProfileService,
@@ -30,9 +33,14 @@ export class AdminController {
     private readonly sellersService: SellersService,
   ) { }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @Post('register')
-  @ApiOperation({ summary: 'Register a new admin (protected operation)' })
+  @ApiBearerAuth()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Register a new admin (admin only)' })
   @ApiResponse({ status: 201, description: 'Admin successfully registered' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires admin role' })
   @ApiResponse({ status: 409, description: 'Email already exists' })
   async register(@Body() createAdminDto: CreateAdminDto) {
     const admin = await this.adminService.create(createAdminDto);
@@ -103,7 +111,7 @@ export class AdminController {
         profile: result
       };
     } catch (error) {
-      console.error("Error updating admin profile picture:", error);
+      this.logger.error("Error updating admin profile picture:", error instanceof Error ? error.message : String(error));
       return { error: "Failed to update profile picture" };
     }
   }

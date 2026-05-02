@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Body, Param, UseGuards, Request, Query, UnauthorizedException } from "@nestjs/common"
+import { getEffectiveUserId } from "../common/team-utils"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
 import { Roles } from "../decorators/roles.decorator"
@@ -29,7 +30,7 @@ export class DealTrackingController {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealTrackingService.create(req.user.userId, createDealTrackingDto)
+    return this.dealTrackingService.create(getEffectiveUserId(req.user), createDealTrackingDto)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -66,7 +67,7 @@ export class DealTrackingController {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated");
     }
-    return this.dealTrackingService.findByBuyer(req.user.userId);
+    return this.dealTrackingService.findByBuyer(getEffectiveUserId(req.user));
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -93,7 +94,7 @@ export class DealTrackingController {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealTrackingService.getRecentActivityForSeller(req.user.userId, limit)
+    return this.dealTrackingService.getRecentActivityForSeller(getEffectiveUserId(req.user), limit)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -108,7 +109,7 @@ export class DealTrackingController {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealTrackingService.logView(dealId, req.user.userId)
+    return this.dealTrackingService.logView(dealId, getEffectiveUserId(req.user))
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -123,7 +124,7 @@ export class DealTrackingController {
     if (!req.user?.userId) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealTrackingService.logInterest(dealId, req.user.userId)
+    return this.dealTrackingService.logInterest(dealId, getEffectiveUserId(req.user))
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -149,6 +150,6 @@ export class DealTrackingController {
     }
     // Safely access notes with optional chaining and default value
     const notes = body?.notes || undefined;
-    return this.dealTrackingService.logRejection(dealId, req.user.userId, notes)
+    return this.dealTrackingService.logRejection(dealId, getEffectiveUserId(req.user), notes)
   }
 }

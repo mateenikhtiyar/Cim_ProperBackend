@@ -23,6 +23,18 @@ export class RolesGuard implements CanActivate {
     }
 
     // Check if the user's role is in the required roles
-    return requiredRoles.some((role) => user.role === role)
+    // Also allow team members to access their parent role's routes
+    // e.g., "seller-member" can access routes requiring "seller" (subject to permission checks)
+    const memberToParentRole: Record<string, string> = {
+      "seller-member": "seller",
+      "buyer-member": "buyer",
+    }
+
+    return requiredRoles.some((role) => {
+      if (user.role === role) return true
+      // Allow member roles when the parent role is required
+      const parentRole = memberToParentRole[user.role]
+      return parentRole === role
+    })
   }
 }

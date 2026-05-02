@@ -16,7 +16,7 @@ export class Buyer {
   fullName: string
 
   @ApiProperty({ description: "Email address of the buyer" })
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true, unique: true, lowercase: true, trim: true })
   email: string
 
   @ApiProperty({ description: "Hashed password of the buyer" })
@@ -47,14 +47,6 @@ export class Buyer {
   @Prop({ default: null })
   profilePicture: string
 
-  @ApiProperty({ description: "Whether the account was created using Google OAuth", default: false })
-  @Prop({ default: false })
-  isGoogleAccount: boolean
-
-  @ApiProperty({ description: "Google ID for OAuth accounts", nullable: true })
-  @Prop({ default: null })
-  googleId: string
-
   @ApiProperty({ description: "Reset token for password recovery", nullable: true })
   @Prop({ default: null })
   resetPasswordToken: string
@@ -62,10 +54,6 @@ export class Buyer {
   @ApiProperty({ description: "Token expiry timestamp", nullable: true })
   @Prop({ default: null })
   resetPasswordExpires: Date
-
-  @ApiProperty({ description: "Whether the email is verified", default: false })
-  @Prop({ default: false })
-  isEmailVerified: boolean
 
   @ApiProperty({ description: "Number of profile completion reminders sent", default: 0 })
   @Prop({ default: 0 })
@@ -78,6 +66,28 @@ export class Buyer {
   @ApiProperty({ description: "How the user heard about CIM Amplify" })
   @Prop({ required: false, default: "" })
   referralSource: string
+
+  @ApiProperty({ description: "Whether the buyer opted in to receive SMS messages" })
+  @Prop({ required: false })
+  signUpForSms?: boolean
+
+  @ApiProperty({
+    description: "Buyer email preferences",
+    default: {
+      receiveDealEmails: true,
+    },
+  })
+  @Prop({
+    type: {
+      receiveDealEmails: { type: Boolean, default: true },
+    },
+    default: {
+      receiveDealEmails: true,
+    },
+  })
+  preferences: {
+    receiveDealEmails: boolean
+  }
 
   // Denormalized deal counts for performance
   @ApiProperty({ description: "Number of active deals", default: 0 })
@@ -97,3 +107,33 @@ export class Buyer {
 }
 
 export const BuyerSchema = SchemaFactory.createForClass(Buyer)
+
+BuyerSchema.index({ companyName: 1 });
+BuyerSchema.index({ fullName: 1 });
+BuyerSchema.index({ phone: 1 });
+BuyerSchema.index({ createdAt: -1 });
+
+BuyerSchema.pre("save", function (next) {
+  if (this.email) {
+    this.email = this.email.toLowerCase().trim();
+  }
+  next();
+});
+
+BuyerSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
+  const update = this.getUpdate() as Record<string, any> | undefined;
+  const normalize = (target: Record<string, any>) => {
+    if (typeof target.email === "string") {
+      target.email = target.email.toLowerCase().trim();
+    }
+  };
+
+  if (update) {
+    normalize(update);
+    if (update.$set && typeof update.$set === "object") {
+      normalize(update.$set);
+    }
+  }
+
+  next();
+});

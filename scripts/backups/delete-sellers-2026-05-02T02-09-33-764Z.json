@@ -1,0 +1,40 @@
+{
+  "createdAt": "2026-05-02T02:09:33.764Z",
+  "collection": "sellers",
+  "deletedIds": [
+    "693077a7c765ebc11a62485a"
+  ],
+  "referencesAtDeletion": {
+    "693077a7c765ebc11a62485a": {
+      "deals.seller": 0,
+      "teammembers.ownerId(seller)": 0,
+      "emailverifications.userId": 0,
+      "activitylogs.userId": 0,
+      "revokedtokens.userId": 0
+    }
+  },
+  "documents": [
+    {
+      "_id": "693077a7c765ebc11a62485a",
+      "fullName": "Ron Hemelt",
+      "email": "RHemelt@EvangelineSecurities.com",
+      "website": "evangelinesecurities.com",
+      "password": "$2b$10$HnJv8.YFXwtE4K4ZIERb4uA0RkLH7QDdo5y8xg035hA9vRmws8jjq",
+      "title": "Managing Director",
+      "companyName": "Evangeline Securities",
+      "role": "seller",
+      "profilePicture": null,
+      "phoneNumber": "9852640286",
+      "isGoogleAccount": false,
+      "googleId": null,
+      "resetPasswordToken": null,
+      "resetPasswordExpires": null,
+      "managementPreferences": "",
+      "isEmailVerified": false,
+      "hideGuidelines": false,
+      "createdAt": "2025-12-03T17:47:19.353Z",
+      "updatedAt": "2025-12-03T17:47:19.353Z",
+      "__v": 0
+    }
+  ]
+}

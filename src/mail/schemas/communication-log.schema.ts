@@ -5,7 +5,7 @@ export type CommunicationLogDocument = CommunicationLog & Document;
 
 @Schema({ timestamps: true })
 export class CommunicationLog {
-  @Prop({ required: true })
+  @Prop({ required: true, lowercase: true, trim: true })
   recipientEmail: string;
 
   @Prop({ required: true })
@@ -31,3 +31,7 @@ export class CommunicationLog {
 }
 
 export const CommunicationLogSchema = SchemaFactory.createForClass(CommunicationLog);
+
+CommunicationLogSchema.index({ recipientEmail: 1, sentAt: -1 });
+CommunicationLogSchema.index({ status: 1, sentAt: -1 });
+CommunicationLogSchema.index({ relatedDealId: 1, sentAt: -1 });

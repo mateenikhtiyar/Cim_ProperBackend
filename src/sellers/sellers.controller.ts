@@ -8,32 +8,25 @@ import {
   Delete,
   UseGuards,
   Request,
-  Res,
   Logger,
   HttpStatus,
   UnauthorizedException,
   ForbiddenException,
   Query,
   BadRequestException,
-  UseInterceptors,
-  UploadedFile,
 } from "@nestjs/common";
-import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { getEffectiveUserId } from "../common/team-utils";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../decorators/roles.decorator";
 import { SellersService } from "./sellers.service";
 import { RegisterSellerDto } from "./dto/create-seller.dto";
-import { SellerGoogleAuthGuard } from "../auth/guards/seller-google-auth.guard";
 import { AuthService } from "../auth/auth.service";
 import { DealsService } from "../deals/deals.service";
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery, ApiConsumes, ApiBody } from "@nestjs/swagger";
-import { GoogleSellerLoginResult } from "../auth/interfaces/google-seller-login-result.interface";
-import { Response } from "express";
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiQuery, ApiBody } from "@nestjs/swagger";
 import { ConfigService } from "@nestjs/config";
 import { UpdateSellerDto } from "./dto/update-seller.dto";
+import { Throttle } from "@nestjs/throttler";
 
 @ApiTags("sellers")
 @Controller("sellers")
@@ -48,6 +41,7 @@ export class SellersController {
   ) {}
 
   @Post('register')
+  @Throttle({ default: { limit: 1000, ttl: 60000 } })
   @ApiOperation({ summary: 'Register a new seller' })
   @ApiResponse({ status: 201, description: 'Seller successfully registered' })
   @ApiResponse({ status: 400, description: 'Bad request' })
@@ -69,46 +63,6 @@ export class SellersController {
     } catch (error) {
       this.logger.error(`Registration error: ${error.message}`, error.stack);
       throw error;
-    }
-  }
-
-  @Get("google")
-  @UseGuards(SellerGoogleAuthGuard)
-  @ApiOperation({ summary: "Initiate Google OAuth login for sellers" })
-  @ApiResponse({ status: 302, description: "Redirects to Google OAuth" })
-  googleAuth() {
-    // This route initiates Google OAuth flow
-  }
-
-  @Get("google/callback")
-  @UseGuards(SellerGoogleAuthGuard)
-  @ApiOperation({ summary: "Google OAuth callback for sellers" })
-  @ApiResponse({ status: 302, description: "Redirects to frontend with token" })
-  async googleAuthCallback(@Request() req, @Res() res: Response) {
-    try {
-      if (!req.user) {
-        this.logger.warn("No user found in request after Google authentication");
-        const frontendUrl = this.configService.get<string>("FRONTEND_URL");
-        return res.redirect(`${frontendUrl}/auth/error?message=Authentication failed`);
-      }
-
-      this.logger.debug(`Google auth data: ${JSON.stringify(req.user)}`);
-
-      const loginResult = (await this.authService.loginSellerWithGoogle(req.user)) as GoogleSellerLoginResult;
-
-      const frontendUrl = this.configService.get<string>("FRONTEND_URL");
-      const redirectPath = loginResult.isNewUser ? "seller/login" : "/seller/login";
-      const userId = loginResult.user._id || (loginResult.user as any).id || "missing-id";
-      const redirectUrl = `${frontendUrl}${redirectPath}?token=${loginResult.access_token}&userId=${userId}&role=seller`;
-
-      this.logger.debug(`Redirecting to: ${redirectUrl}`);
-      return res.redirect(redirectUrl);
-    } catch (error) {
-      this.logger.error(`Google callback error: ${error.message}`, error.stack);
-      const frontendUrl = this.configService.get<string>("FRONTEND_URL");
-      return res.redirect(
-        `${frontendUrl}/auth/error?message=${encodeURIComponent(error.message || "Authentication failed")}`,
-      );
     }
   }
 
@@ -138,6 +92,26 @@ export class SellersController {
     }
   }
 
+  @Post("bulk")
+  @ApiOperation({ summary: "Get public seller info for multiple seller IDs" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        sellerIds: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+      required: ["sellerIds"],
+    },
+  })
+  @ApiResponse({ status: 200, description: "Return public seller info list" })
+  async getSellersPublicBulk(@Body() body: { sellerIds: string[] }) {
+    const sellerIds = Array.isArray(body?.sellerIds) ? body.sellerIds : [];
+    return this.sellersService.getPublicSellersByIds(sellerIds);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('seller')
   @Get('profile')
@@ -147,7 +121,7 @@ export class SellersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getProfile(@Request() req: any) {
     try {
-      return await this.sellersService.findById(req.user?.userId || req.user?.sub);
+      return await this.sellersService.findById(getEffectiveUserId(req.user));
     } catch (error) {
       this.logger.error(`Error getting profile: ${error.message}`, error.stack);
       throw error;
@@ -183,7 +157,7 @@ export class SellersController {
   @ApiResponse({ status: 404, description: "Seller not found" })
   async findOne(@Param('id') id: string, @Request() req: any) {
     try {
-      if (req.user?.role === "seller" && req.user?.userId !== id && req.user?.sub !== id) {
+      if (req.user?.role === "seller" && getEffectiveUserId(req.user) !== id) {
         return { message: "You can only view your own profile", statusCode: HttpStatus.FORBIDDEN };
       }
       return await this.sellersService.findById(id);
@@ -203,10 +177,10 @@ export class SellersController {
   @ApiResponse({ status: 401, description: "Unauthorized" })
   async updateMyProfile(@Body() updateSellerDto: UpdateSellerDto, @Request() req: any) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       return await this.sellersService.update(sellerId, updateSellerDto);
     } catch (error) {
       this.logger.error(`Error updating seller profile: ${error.message}`, error.stack);
@@ -226,7 +200,7 @@ export class SellersController {
   @ApiResponse({ status: 404, description: "Seller not found" })
   async update(@Param('id') id: string, @Body() updateSellerDto: UpdateSellerDto, @Request() req: any) {
     try {
-      if (req.user?.role === "seller" && req.user?.userId !== id && req.user?.sub !== id) {
+      if (req.user?.role === "seller" && getEffectiveUserId(req.user) !== id) {
         throw new ForbiddenException("You can only update your own profile");
       }
       return await this.sellersService.update(id, updateSellerDto);
@@ -264,10 +238,10 @@ export class SellersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getDealHistory(@Request() req: any) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       return await this.dealsService.getDealHistory(sellerId);
     } catch (error) {
       this.logger.error(`Error getting deal history: ${error.message}`, error.stack);
@@ -286,10 +260,10 @@ export class SellersController {
   @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
   async getDealBuyerInteractions(@Param('dealId') dealId: string, @Request() req: any) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       const deal = await this.dealsService.findOne(dealId);
       if (deal.seller.toString() !== sellerId) {
         throw new ForbiddenException("You don't have permission to view interactions for this deal");
@@ -312,10 +286,10 @@ export class SellersController {
   @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
   async getDealStatusSummary(@Param('dealId') dealId: string, @Request() req: any) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       const deal = await this.dealsService.findOne(dealId);
       if (deal.seller.toString() !== sellerId) {
         throw new ForbiddenException("You don't have permission to view this deal's status");
@@ -338,10 +312,10 @@ export class SellersController {
   @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
   async getDealBuyerActivity(@Param('dealId') dealId: string, @Request() req: any) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       const deal = await this.dealsService.findOne(dealId);
       if (deal.seller.toString() !== sellerId) {
         throw new ForbiddenException("You don't have permission to view this deal's activity");
@@ -368,10 +342,10 @@ export class SellersController {
   @ApiResponse({ status: 401, description: "Unauthorized" })
   async getRecentBuyerActions(@Request() req: any, @Query('limit') limit: number = 20) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       return await this.dealsService.getRecentBuyerActionsForSeller(sellerId, limit);
     } catch (error) {
       this.logger.error(`Error getting recent buyer actions: ${error.message}`, error.stack);
@@ -390,10 +364,10 @@ export class SellersController {
   @ApiResponse({ status: 403, description: "Forbidden - not your deal" })
   async getInterestedBuyers(@Param('dealId') dealId: string, @Request() req: any) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       const deal = await this.dealsService.findOne(dealId);
       if (deal.seller.toString() !== sellerId) {
         throw new ForbiddenException("You don't have permission to view this deal's interested buyers");
@@ -406,6 +380,41 @@ export class SellersController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("seller", "admin")
+  @Post("deals/:dealId/interested-buyers/:buyerId/flag-inactive")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Flag a specific interested buyer as inactive for a deal" })
+  @ApiParam({ name: "dealId", type: String, description: "Deal ID" })
+  @ApiParam({ name: "buyerId", type: String, description: "Buyer ID" })
+  @ApiResponse({ status: 200, description: "Buyer flagged as inactive" })
+  async flagInterestedBuyerInactive(
+    @Param('dealId') dealId: string,
+    @Param('buyerId') buyerId: string,
+    @Request() req: any,
+  ) {
+    if (!getEffectiveUserId(req.user)) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    const sellerId = getEffectiveUserId(req.user);
+    const deal = await this.dealsService.findOne(dealId);
+    if (req.user.role !== 'admin' && deal.seller.toString() !== sellerId) {
+      throw new ForbiddenException("You don't have permission to modify this deal");
+    }
+
+    const updatedDeal = await this.dealsService.flagInterestedBuyerInactive(
+      dealId,
+      buyerId,
+      req.user.role === 'admin' ? 'admin' : 'seller',
+    );
+
+    return {
+      message: 'Buyer flagged as inactive successfully',
+      deal: updatedDeal,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("seller")
   @Get("dashboard/buyer-engagement")
   @ApiBearerAuth()
@@ -414,76 +423,16 @@ export class SellersController {
   @ApiResponse({ status: 401, description: "Unauthorized" })
   async getBuyerEngagementDashboard(@Request() req: any) {
     try {
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       return await this.dealsService.getBuyerEngagementDashboard(sellerId);
     } catch (error) {
       this.logger.error(`Error getting buyer engagement dashboard: ${error.message}`, error.stack);
       throw error;
     }
   }
-
-  // UPLOAD ENDPOINTS DISABLED FOR VERCEL (read-only filesystem)
-  // Use Cloudinary or AWS S3 for file uploads in production
-  /*
-  @UseGuards(JwtAuthGuard)
-  @Post("upload-profile-picture")
-  @ApiBearerAuth()
-  @ApiConsumes("multipart/form-data")
-  @ApiOperation({ summary: "Upload profile picture" })
-  @ApiResponse({ status: 200, description: "Profile picture uploaded successfully" })
-  @ApiResponse({ status: 401, description: "Unauthorized" })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: './uploads/profile-pictures',
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
-      fileFilter: (req, file, cb) => {
-        if (!file.mimetype.match(/\/(jpg|jpeg|png|gif)$/)) {
-          cb(new Error('Only image files are allowed!'), false);
-        } else {
-          cb(null, true);
-        }
-      },
-      limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB limit
-      },
-    }),
-  )
-  async uploadProfilePicture(
-    @UploadedFile() file: Express.Multer.File,
-    @Request() req: any,
-  ) {
-    try {
-      if (!file) {
-        throw new BadRequestException('No file uploaded');
-      }
-
-      const sellerId = req.user?.userId || req.user?.sub;
-      if (!sellerId) {
-        throw new UnauthorizedException('User not authenticated');
-      }
-
-      // Update seller's profile picture path
-      const profilePicturePath = `uploads/profile-pictures/${file.filename}`;
-      await this.sellersService.update(sellerId, { profilePicture: profilePicturePath });
-
-      return {
-        message: 'Profile picture uploaded successfully',
-        profilePicture: profilePicturePath,
-      };
-    } catch (error) {
-      this.logger.error(`Error uploading profile picture: ${error.message}`, error.stack);
-      throw error;
-    }
-  }
-  */
 
   // Base64 profile picture upload endpoint
   @UseGuards(JwtAuthGuard)
@@ -496,7 +445,7 @@ export class SellersController {
     @Request() req: any,
     @Body() body: { profilePicture: string }
   ) {
-    const sellerId = req.user?.userId || req.user?.sub;
+    const sellerId = getEffectiveUserId(req.user);
     if (!sellerId) {
       throw new UnauthorizedException('User not authenticated');
     }
@@ -534,15 +483,15 @@ export class SellersController {
   @ApiResponse({ status: 404, description: "Deal not found" })
   async closeDeal(
     @Param('dealId') dealId: string,
-    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string } = {},
+    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string; buyerFromCIM?: boolean } = {},
     @Request() req: any,
   ) {
     try {
       this.logger.debug(`Attempting to close deal ${dealId}`);
-      if (!req.user?.userId && !req.user?.sub) {
+      if (!getEffectiveUserId(req.user)) {
         throw new UnauthorizedException("User not authenticated");
       }
-      const sellerId = req.user?.userId || req.user?.sub;
+      const sellerId = getEffectiveUserId(req.user);
       this.logger.debug(`Seller ID: ${sellerId}`);
       if (!dealId.match(/^[0-9a-fA-F]{24}$/)) {
         throw new BadRequestException("Invalid deal ID format");
@@ -553,6 +502,7 @@ export class SellersController {
         finalSalePrice: body.finalSalePrice,
         notes: body.notes,
         winningBuyerId: body.winningBuyerId,
+        buyerFromCIM: body.buyerFromCIM,
       });
       const closedDeal = await this.dealsService.closeDealseller(
         dealId,
@@ -560,6 +510,8 @@ export class SellersController {
         body.finalSalePrice,
         body.notes,
         body.winningBuyerId,
+        undefined,
+        body.buyerFromCIM,
       );
       return {
         message: "Deal closed successfully",

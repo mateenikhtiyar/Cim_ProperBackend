@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common"
+import { APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core"
+import { CacheControlInterceptor } from "./common/cache-control.interceptor"
 import { MongooseModule } from "@nestjs/mongoose"
 import { ConfigModule } from "@nestjs/config"
-import { ServeStaticModule } from "@nestjs/serve-static"
+import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler"
 import { join } from "path"
 import { BuyersModule } from "buyers/buyers.module"
 import { AuthModule } from "auth/auth.module"
@@ -10,28 +12,33 @@ import { AdminModule } from "admin/admin.module"
 import { SellersModule } from "sellers/sellers.module"
 import { DealsModule } from "deals/deals.module"
 import { DealTrackingModule } from "deal-tracking/deal-tracking.module"
-import { DealsService } from "deals/deals.service"
 import { MailModule } from './mail/mail.module';
 import { ClassificationModule } from './classification/classification.module';
-
-
+import { TeamModule } from './team/team.module';
+import { validateEnvironment } from "./config/env.validation";
 import { CronModule } from './cron/cron.module';
-// import { TestModule } from './test/test.module'; // Disabled for Vercel
 import { ScheduleModule } from '@nestjs/schedule';
-import * as path from 'path';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: join(__dirname, '..', '.env'), // Point to CIM-new/backend/.env
+      envFilePath: join(__dirname, '..', '.env'),
+      validate: validateEnvironment,
     }),
-    MongooseModule.forRoot(process.env.MONGODB_URI || "mongodb://localhost/e-commerce"),
-    ServeStaticModule.forRoot({
-      rootPath: join(__dirname, "..", "Uploads"),
-      serveRoot: "/Uploads",
+    ThrottlerModule.forRoot([
+      { name: "default", ttl: 60000, limit: 30000 },
+      { name: "short", ttl: 1000, limit: 500 },
+      { name: "long", ttl: 3600000, limit: 200000 },
+    ]),
+    MongooseModule.forRoot(process.env.MONGODB_URI as string, {
+      maxPoolSize: 100,
+      minPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      family: 4,
     }),
-    // ScheduleModule.forRoot(), // Disabled for Vercel (10s timeout)
+    ScheduleModule.forRoot(),
     BuyersModule,
     AuthModule,
     CompanyProfileModule,
@@ -40,11 +47,23 @@ import * as path from 'path';
     DealsModule,
     DealTrackingModule,
     MailModule,
-    // CronModule, // Disabled for Vercel
-    // TestModule, // Disabled for Vercel
+    // CronModule must run on exactly one backend instance. Do not scale this
+    // backend to >1 pm2 instance or cluster mode without first gating cron jobs
+    // by NODE_APP_INSTANCE === '0', otherwise emails will fire N times.
+    CronModule,
     ClassificationModule,
+    TeamModule,
   ],
-  providers: [],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CacheControlInterceptor,
+    },
+  ],
   controllers: [],
 })
 export class AppModule { }

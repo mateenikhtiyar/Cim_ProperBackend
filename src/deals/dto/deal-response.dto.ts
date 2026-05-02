@@ -26,6 +26,9 @@ export class DealResponseDto {
   @ApiProperty({ example: "Technology" })
   industrySector: string
 
+  @ApiProperty({ example: ["Technology", "Healthcare"], required: false })
+  industrySectors?: string[]
+
   @ApiProperty({ example: "United States" })
   geographySelection: string
 
@@ -134,9 +137,21 @@ export class DealResponseDto {
   @ApiProperty({ example: false })
   isFeatured: boolean
 
+  @ApiProperty({ example: false, required: false })
+  requiresBuyerFeeAboveAmplifyFees?: boolean
+
   @ApiProperty({ example: 100 })
   stakePercentage?: number
 
   @ApiProperty({ example: ["document1.pdf", "document2.pdf"] })
   documents?: string[]
+
+  @ApiProperty({ example: "60d21b4667d0d8992e610c88", required: false })
+  loiWithBuyer?: string
+
+  @ApiProperty({ example: "Acme Capital", required: false })
+  loiWithBuyerCompany?: string
+
+  @ApiProperty({ example: "buyer@example.com", required: false })
+  loiWithBuyerEmail?: string
 }

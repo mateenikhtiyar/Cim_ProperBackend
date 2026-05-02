@@ -234,13 +234,103 @@ export const geographyHierarchy = {
     "Zambia": ["Zambia"],
     "Zimbabwe": ["Zimbabwe"]
   };
-  
-  export function expandCountryOrRegion(selected: string): string[] {
-    // If it's a top-level region (continent), return all subregions
-    if (geographyHierarchy[selected]) {
-      return geographyHierarchy[selected];
-    }
-    // Otherwise, return itself
-    return [selected];
+
+export const US_KEY_REGIONS: Record<string, string[]> = {
+  Northeast: ["Connecticut", "Maine", "Massachusetts", "New Hampshire", "Rhode Island", "Vermont", "New Jersey", "New York", "Pennsylvania"],
+  Midwest: ["Illinois", "Indiana", "Michigan", "Ohio", "Wisconsin", "Iowa", "Kansas", "Minnesota", "Missouri", "Nebraska", "North Dakota", "South Dakota"],
+  South: ["Delaware", "Florida", "Georgia", "Maryland", "North Carolina", "South Carolina", "Virginia", "West Virginia", "District of Columbia", "Alabama", "Kentucky", "Mississippi", "Tennessee", "Arkansas", "Louisiana", "Oklahoma", "Texas"],
+  West: ["Arizona", "Colorado", "Idaho", "Montana", "Nevada", "New Mexico", "Utah", "Wyoming", "Alaska", "California", "Hawaii", "Oregon", "Washington"],
+};
+
+const US_REGION_PREFIX = "United States > ";
+const ALL_US_REGION_LABELS = Object.keys(US_KEY_REGIONS).map((region) => `${US_REGION_PREFIX}${region}`);
+const ALL_US_STATE_LABELS = Object.values(US_KEY_REGIONS).flat().map((state) => `${US_REGION_PREFIX}${state}`);
+const US_STATE_TO_REGION = Object.entries(US_KEY_REGIONS).reduce((acc, [region, states]) => {
+  states.forEach((state) => {
+    acc[state] = region;
+  });
+  return acc;
+}, {} as Record<string, string>);
+
+export function expandCountryOrRegion(selected: string): string[] {
+  const expanded = new Set<string>();
+  expanded.add(selected);
+
+  // If it's a top-level region (continent), return all subregions
+  const hierarchy = geographyHierarchy as Record<string, string[]>;
+  if (hierarchy[selected]) {
+    hierarchy[selected].forEach((value: string) => expanded.add(value));
   }
-  
+
+  if (selected === "United States") {
+    ALL_US_REGION_LABELS.forEach((value) => expanded.add(value));
+    ALL_US_STATE_LABELS.forEach((value) => expanded.add(value));
+  }
+
+  if (selected.startsWith(US_REGION_PREFIX)) {
+    const usSelection = selected.slice(US_REGION_PREFIX.length).trim();
+    expanded.add("United States");
+
+    if (US_KEY_REGIONS[usSelection]) {
+      US_KEY_REGIONS[usSelection].forEach((state) => expanded.add(`${US_REGION_PREFIX}${state}`));
+    } else if (US_STATE_TO_REGION[usSelection]) {
+      expanded.add(`${US_REGION_PREFIX}${US_STATE_TO_REGION[usSelection]}`);
+    }
+  }
+
+  // Handle non-US "Country > State" format (e.g. "Mexico > Chiapas", "Canada > Ontario")
+  // Include the parent country so it matches buyers who selected the whole country
+  if (selected.includes(" > ") && !selected.startsWith(US_REGION_PREFIX)) {
+    const country = selected.split(" > ")[0].trim();
+    expanded.add(country);
+  }
+
+  return Array.from(expanded);
+}
+
+/**
+ * Reverse lookup: given a search term (e.g. "Connecticut" or "Northeast"),
+ * return all possible geographySelection values that would encompass it.
+ * Used for marketplace search so searching a state also finds region-level deals.
+ */
+export function findMatchingGeographies(searchTerm: string): string[] {
+  const term = searchTerm.trim().toLowerCase();
+  if (!term) return [];
+
+  const matches = new Set<string>();
+
+  // Check if the term matches a US state name
+  for (const [region, states] of Object.entries(US_KEY_REGIONS)) {
+    for (const state of states) {
+      if (state.toLowerCase().includes(term)) {
+        matches.add(`${US_REGION_PREFIX}${state}`);
+        matches.add(`${US_REGION_PREFIX}${region}`);
+        matches.add("United States");
+      }
+    }
+    // Check if the term matches a US region name
+    if (region.toLowerCase().includes(term)) {
+      matches.add(`${US_REGION_PREFIX}${region}`);
+      matches.add("United States");
+    }
+  }
+
+  // Check if the term matches a country name
+  for (const key of Object.keys(geographyHierarchy)) {
+    if (key.toLowerCase().includes(term)) {
+      matches.add(key);
+    }
+  }
+
+  // Check if the term matches any country within a continent
+  for (const [continent, countries] of Object.entries(geographyHierarchy)) {
+    for (const country of countries) {
+      if (country.toLowerCase().includes(term)) {
+        matches.add(country);
+        matches.add(continent);
+      }
+    }
+  }
+
+  return Array.from(matches);
+}

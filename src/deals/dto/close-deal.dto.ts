@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger"
-import { IsNumber, IsOptional, IsString, IsMongoId, ValidateIf } from "class-validator"
+import { IsNumber, IsOptional, IsString, IsMongoId, ValidateIf, IsBoolean } from "class-validator"
 
 export class CloseDealDto {
     @ApiProperty({
@@ -29,4 +29,13 @@ export class CloseDealDto {
     @IsMongoId({ message: "If provided, winningBuyerId must be a valid MongoDB ObjectId" })
     @IsOptional()
     winningBuyerId?: string
+
+    @ApiProperty({
+        description: "Whether the winning buyer came from CIM Amplify",
+        example: true,
+        required: false,
+    })
+    @IsBoolean()
+    @IsOptional()
+    buyerFromCIM?: boolean
 }
