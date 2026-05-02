@@ -150,17 +150,21 @@ class DealTimeline {
 
 @Schema()
 class DealDocument {
-  @ApiProperty({ description: "File name on server" })
+  @ApiProperty({ description: "Generated unique file name" })
   @Prop({ required: true })
   filename: string
 
-  @ApiProperty({ description: "Original file name" })
+  @ApiProperty({ description: "Original file name as uploaded by the user" })
   @Prop({ required: true })
   originalName: string
 
-  @ApiProperty({ description: "File path on server" })
-  @Prop({ required: true })
-  path: string
+  @ApiProperty({ description: "Legacy file path on disk (only present for pre-migration uploads)", required: false })
+  @Prop({ required: false })
+  path?: string
+
+  @ApiProperty({ description: "Base64-encoded file content stored in MongoDB", required: false })
+  @Prop({ required: false })
+  base64Content?: string
 
   @ApiProperty({ description: "File size in bytes" })
   @Prop({ required: true })
@@ -233,6 +237,10 @@ export class Deal {
   @Prop({ required: true })
   industrySector!: string
 
+  @ApiProperty({ description: "Up to 3 selected industry sectors for matching", type: [String], required: false })
+  @Prop({ type: [String], default: [] })
+  industrySectors?: string[]
+
   @ApiProperty({ description: "Geographic location/country of the company" })
   @Prop({ required: true })
   geographySelection!: string
@@ -297,6 +305,14 @@ export class Deal {
   @Prop({ default: false })
   isFeatured!: boolean
 
+  @ApiProperty({
+    description: "Whether buyer must pay a buy-side fee above CIM Amplify fees",
+    default: false,
+    required: false,
+  })
+  @Prop({ default: false })
+  requiresBuyerFeeAboveAmplifyFees?: boolean
+
   @ApiProperty({ description: "Stake percentage being offered", example: 100 })
   @Prop({ required: false })
   stakePercentage?: number
@@ -328,6 +344,10 @@ export class Deal {
       response: { type: String, enum: ["requested", "pending", "accepted", "rejected"] },
       notes: String,
       decisionBy: { type: String, enum: ["buyer", "seller"] },
+      introFollowUpSentAt: Date,
+      flaggedInactive: { type: Boolean, default: false },
+      flaggedInactiveAt: Date,
+      flaggedInactiveBy: { type: String, enum: ["buyer", "seller", "admin"] },
     },
     default: () => new Map(),
   })
@@ -339,6 +359,10 @@ export class Deal {
       response: "requested" | "pending" | "accepted" | "rejected"
       notes?: string
       decisionBy?: "buyer" | "seller"
+      introFollowUpSentAt?: Date
+      flaggedInactive?: boolean
+      flaggedInactiveAt?: Date
+      flaggedInactiveBy?: "buyer" | "seller" | "admin"
     }
   >
 
@@ -365,6 +389,22 @@ export class Deal {
   @ApiProperty({ description: "The email of the buyer the deal was closed with, if from CIM Amplify", required: false })
   @Prop({ required: false })
   closedWithBuyerEmail?: string;
+
+  @ApiProperty({ description: "Whether deal was closed with a CIM Amplify buyer", required: false, default: false })
+  @Prop({ default: false })
+  closedWithCimAmplify?: boolean;
+
+  @ApiProperty({ description: "The buyer (ObjectId) the deal is in LOI with, if from CIM Amplify", required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: "Buyer", required: false })
+  loiWithBuyer?: string;
+
+  @ApiProperty({ description: "The company name of the buyer the deal is in LOI with", required: false })
+  @Prop({ required: false })
+  loiWithBuyerCompany?: string;
+
+  @ApiProperty({ description: "The email of the buyer the deal is in LOI with", required: false })
+  @Prop({ required: false })
+  loiWithBuyerEmail?: string;
 
   @ApiProperty({ description: "Flag to hide deal guidelines modal for the user", default: false })
   @Prop({ default: false })
@@ -397,6 +437,12 @@ DealSchema.index({ status: 1, "timeline.updatedAt": -1 }); // For active/complet
 DealSchema.index({ status: 1, createdAt: -1 }); // For deals sorted by creation date
 DealSchema.index({ seller: 1, status: 1 }); // For seller's deals by status
 DealSchema.index({ isPublic: 1, status: 1 }); // For marketplace deals
+
+// Additional compound indexes for high-traffic dashboard queries
+DealSchema.index({ seller: 1, createdAt: -1 }); // Seller's deals by date (seller dashboard)
+DealSchema.index({ targetedBuyers: 1, status: 1 }); // Buyer's pending/active deals
+DealSchema.index({ interestedBuyers: 1, status: 1 }); // Buyer's active (interested) deals
+DealSchema.index({ isPublic: 1, status: 1, createdAt: -1 }); // Marketplace sorted by date
 
 // Add createdAt and updatedAt timestamps
 DealSchema.pre("save", function (next) {

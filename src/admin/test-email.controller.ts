@@ -1,4 +1,4 @@
-import { Controller, Post, Get, UseGuards, Body } from '@nestjs/common';
+import { Controller, Post, Get, UseGuards, Body, Logger, BadRequestException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../decorators/roles.decorator';
@@ -10,6 +10,8 @@ import { ILLUSTRATION_ATTACHMENT } from '../mail/mail.service';
 
 @Controller('admin/test-email')
 export class TestEmailController {
+  private readonly logger = new Logger(TestEmailController.name);
+
   constructor(
     private cronService: CronService,
     private authService: AuthService,
@@ -26,18 +28,6 @@ export class TestEmailController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  @Post('verification-email')
-  async testVerificationEmail(@Body() body: { email: string }) {
-    try {
-      await this.authService.resendVerificationEmail(body.email);
-      return { message: `Verification email sent to ${body.email}` };
-    } catch (error) {
-      return { error: error.message };
-    }
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
   @Post('simple-email')
   async testSimpleEmail(@Body() body: { email: string }) {
     try {
@@ -47,9 +37,9 @@ export class TestEmailController {
         <p>If you receive this email, the system is functioning properly.</p>
         <p>Timestamp: ${new Date().toISOString()}</p>
       `;
-      
+
       const emailBody = genericEmailTemplate(subject, 'Test User', emailContent);
-      
+
       await this.mailService.sendEmailWithLogging(
         body.email,
         'admin',
@@ -57,10 +47,11 @@ export class TestEmailController {
         emailBody,
         [ILLUSTRATION_ATTACHMENT]
       );
-      
+
       return { message: `Test email sent to ${body.email}` };
     } catch (error) {
-      return { error: error.message };
+      this.logger.error('Failed to send test email', error instanceof Error ? error.stack : String(error));
+      throw new BadRequestException('Failed to send test email. Please try again.');
     }
   }
 

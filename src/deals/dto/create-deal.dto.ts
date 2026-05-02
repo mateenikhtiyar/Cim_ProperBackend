@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger"
-import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max, IsDate } from "class-validator"
+import { IsString, IsEnum, IsArray, IsBoolean, IsOptional, IsNumber, ValidateNested, Min, Max, IsDate, ArrayMaxSize } from "class-validator"
 import { Type } from "class-transformer"
 import { DealStatus, DealType, DealVisibility, CapitalAvailability } from "../schemas/deal.schema"
 
@@ -142,7 +142,8 @@ export class CreateDealWithFilesDto {
 export interface DocumentInfo {
   filename: string;
   originalName: string;
-  path: string;
+  path?: string;
+  base64Content?: string;
   size: number;
   mimetype: string;
   uploadedAt: Date;
@@ -205,6 +206,13 @@ export class CreateDealDto {
   @ApiProperty({ description: "Industry sector of the company", example: "Technology" })
   @IsString()
   industrySector: string
+
+  @ApiProperty({ description: "Up to 3 industry sectors", type: [String], required: false, example: ["Technology", "Healthcare"] })
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(3)
+  @IsOptional()
+  industrySectors?: string[]
 
   @ApiProperty({ description: "Geographic location/country of the company", example: "United States" })
   @IsString()
@@ -271,6 +279,15 @@ export class CreateDealDto {
   @IsBoolean()
   @IsOptional()
   isFeatured?: boolean = false
+
+  @ApiProperty({
+    description: "Whether buyer must pay a buy-side fee above CIM Amplify fees",
+    default: false,
+    required: false,
+  })
+  @IsBoolean()
+  @IsOptional()
+  requiresBuyerFeeAboveAmplifyFees?: boolean = false
 
   @ApiProperty({ description: "Stake percentage being offered", example: 100, required: false })
   @IsNumber()

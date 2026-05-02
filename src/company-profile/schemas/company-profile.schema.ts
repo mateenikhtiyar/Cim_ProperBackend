@@ -13,7 +13,7 @@ class Contact {
   name: string
 
   @ApiProperty({ description: "Email of the contact person" })
-  @Prop({ required: true })
+  @Prop({ required: true, lowercase: true, trim: true })
   email: string
 
   @ApiProperty({ description: "Phone number of the contact person" })
@@ -165,3 +165,7 @@ export class CompanyProfile {
 }
 
 export const CompanyProfileSchema = SchemaFactory.createForClass(CompanyProfile)
+
+CompanyProfileSchema.index({ buyer: 1 }, { unique: true });
+CompanyProfileSchema.index({ companyName: 1 });
+CompanyProfileSchema.index({ createdAt: -1 });

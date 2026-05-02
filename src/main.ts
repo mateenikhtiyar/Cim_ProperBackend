@@ -1,52 +1,48 @@
 import "./shims"
 import { NestFactory } from "@nestjs/core"
-import { ValidationPipe } from "@nestjs/common"
+import { Logger, ValidationPipe } from "@nestjs/common"
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger"
 import { NestExpressApplication } from '@nestjs/platform-express'
-import { join } from 'path'
-import { existsSync, mkdirSync } from 'fs'
 import { AppModule } from "./app.module"
 import * as express from "express"
+import helmet from "helmet"
 import { GlobalExceptionFilter } from "./common/filters/http-exception.filter"
 
-let cachedApp: NestExpressApplication;
+const bootstrapLogger = new Logger("Bootstrap");
 
 async function bootstrap() {
-  if (cachedApp) {
-    return cachedApp;
-  }
-
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // Create uploads directories if they don't exist (only for local development)
-  if (process.env.VERCEL !== '1') {
-    const uploadDirs = ['./uploads', './uploads/profile-pictures', './uploads/deal-documents'];
-    uploadDirs.forEach(dir => {
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-        console.log(`📁 Created directory: ${dir}`);
-      }
-    });
+  const frontendUrlConfig = process.env.FRONTEND_URL
+  if (!frontendUrlConfig) {
+    throw new Error("FRONTEND_URL must be set to one or more allowed origins.")
+  }
+  const allowedOrigins = frontendUrlConfig
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean)
 
-    // Serve static files from uploads directory
-    app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-      prefix: '/uploads/',
-    });
+  if (allowedOrigins.length === 0) {
+    throw new Error("FRONTEND_URL must contain at least one valid origin.")
   }
 
-  let frontendUrl = process.env.FRONTEND_URL || "https://app.cimamplify.com"
-  // Remove trailing slash if present
-  if (frontendUrl.endsWith("/")) {
-    frontendUrl = frontendUrl.slice(0, -1)
-  }
-  // Enable CORS before other middleware
+  // Enable CORS BEFORE helmet so preflight OPTIONS requests are handled first
   app.enableCors({
-    origin: true, // Allow all origins for now
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true)
+      }
+      const normalizedOrigin = origin.replace(/\/$/, "")
+      if (allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true)
+      }
+      return callback(new Error("Origin not allowed by CORS"), false)
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: [
-      'Content-Type', 
-      'Authorization', 
+      'Content-Type',
+      'Authorization',
       'Accept',
       'Cache-Control',
       'X-Requested-With',
@@ -56,6 +52,49 @@ async function bootstrap() {
     ],
     exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
   })
+
+  // Swagger UI ships inline bootstrap scripts; we relax the CSP only on its
+  // route by registering a route-scoped helmet middleware *before* the global
+  // one. styleSrc keeps 'unsafe-inline' globally since most CSS-in-JS
+  // libraries (Tailwind plugins, framer-motion, etc.) emit inline styles.
+  app.use(
+    '/api-docs',
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+          styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+          imgSrc: ["'self'", "data:", "https:"],
+          connectSrc: ["'self'", "https:"],
+        },
+      },
+      referrerPolicy: { policy: 'no-referrer' },
+      frameguard: { action: 'deny' },
+    }),
+  )
+
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          defaultSrc: ["'self'"],
+          // No 'unsafe-inline' on scripts — the React build emits no inline
+          // <script> tags, so removing it closes a real XSS escalation path.
+          scriptSrc: ["'self'", "https://cdnjs.cloudflare.com"],
+          styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+          imgSrc: ["'self'", "data:", "https:"],
+          connectSrc: ["'self'", "https:"],
+        },
+      },
+      referrerPolicy: { policy: "no-referrer" },
+      frameguard: { action: "deny" },
+    }),
+  )
 
   // Increase body size limit for large uploads (e.g., base64 images)
   app.use(express.json({ limit: '50mb' }))
@@ -75,11 +114,11 @@ async function bootstrap() {
     }),
   )
   
-  // Setup Swagger with CDN assets for Vercel
+  const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`
   const config = new DocumentBuilder()
     .setTitle("CIM Amplify API")
     .setDescription("The CIM Amplify API documentation")
-    .setVersion("1.0")
+    .setVersion("2.2")
     .addTag("auth")
     .addTag("buyers")
     .addTag("admin")
@@ -88,8 +127,7 @@ async function bootstrap() {
     .addTag("deal-tracking")
     .addTag("company-profiles")
     .addBearerAuth()
-    .addServer(process.env.BACKEND_URL || 'https://api.cimamplify.com', 'Production')
-    .addServer('https://api.cimamplify.com', 'Development')
+    .addServer(backendUrl, 'Production')
     .build()
   const document = SwaggerModule.createDocument(app, config)
   SwaggerModule.setup("api-docs", app, document, {
@@ -105,32 +143,12 @@ async function bootstrap() {
   })
 
   const port = process.env.PORT || 3001;
-  
-  // Only listen on port if not in Vercel environment
-  if (process.env.VERCEL !== '1') {
-    await app.listen(port);
-    console.log(`🚀 Backend server running on http://localhost:${port}`);
-    console.log(`📚 Swagger docs available at http://localhost:${port}/api-docs`);
-  } else {
-    await app.init();
-  }
-  
-  cachedApp = app;
-  return app;
+  await app.listen(port);
+  bootstrapLogger.log(`Backend server running on http://localhost:${port}`);
+  bootstrapLogger.log(`Swagger docs available at http://localhost:${port}/api-docs`);
 }
 
-// Call bootstrap when running locally (not in Vercel)
-// This ensures the server starts when running npm run start:dev or npm run start
-if (process.env.VERCEL !== '1' && require.main === module) {
-  bootstrap().catch((error) => {
-    console.error('❌ Error starting server:', error);
-    process.exit(1);
-  });
-}
-
-// Vercel serverless handler
-export default async (req, res) => {
-  const app = await bootstrap();
-  const server = app.getHttpAdapter().getInstance();
-  return server(req, res);
-};
+bootstrap().catch((error) => {
+  bootstrapLogger.error('Error starting server', error instanceof Error ? error.stack : String(error));
+  process.exit(1);
+});

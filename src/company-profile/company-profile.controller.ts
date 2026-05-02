@@ -11,6 +11,7 @@ import {
   NotFoundException,
   UnauthorizedException
 } from '@nestjs/common';
+import { getEffectiveUserId } from '../common/team-utils';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -52,7 +53,7 @@ export class CompanyProfileController {
       throw new UnauthorizedException('User not authenticated');
     }
     return this.companyProfileService.create(
-      req.user.userId,
+      getEffectiveUserId(req.user),
       createCompanyProfileDto
     );
   }
@@ -70,7 +71,7 @@ export class CompanyProfileController {
       throw new UnauthorizedException('User not authenticated');
     }
     try {
-      return await this.companyProfileService.findByBuyerId(req.user.userId);
+      return await this.companyProfileService.findByBuyerId(getEffectiveUserId(req.user));
     } catch (error) {
       if (error instanceof NotFoundException) {
         return { exists: false, message: 'Company profile not created yet' };
@@ -128,7 +129,7 @@ export class CompanyProfileController {
     }
     return this.companyProfileService.update(
       id,
-      req.user.userId,
+      getEffectiveUserId(req.user),
       updateCompanyProfileDto
     );
   }
@@ -151,7 +152,7 @@ export class CompanyProfileController {
     }
 
 
-    await this.companyProfileService.remove(id, req.user.userId);
+    await this.companyProfileService.remove(id, getEffectiveUserId(req.user));
 
 
     return { message: 'Company profile deleted successfully' };

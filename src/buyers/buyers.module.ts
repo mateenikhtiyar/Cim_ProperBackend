@@ -1,6 +1,4 @@
-// file: src/buyers/buyers.module.ts
 import { Module, forwardRef } from "@nestjs/common";
-// import { MulterModule } from "@nestjs/platform-express"; // DISABLED FOR VERCEL
 import { BuyersController } from "./buyers.controller";
 import { BuyersService } from "./buyers.service";
 import { AuthModule } from "../auth/auth.module";
@@ -12,7 +10,6 @@ import { DealsModule } from "../deals/deals.module";
 
 @Module({
   imports: [
-    // MulterModule.register({ dest: "./Uploads" }), // DISABLED FOR VERCEL
     forwardRef(() => AuthModule),
     MongooseModule.forFeature([
       { name: Buyer.name, schema: BuyerSchema },
@@ -23,7 +20,7 @@ import { DealsModule } from "../deals/deals.module";
   ],
   controllers: [BuyersController],
   providers: [BuyersService],
-  exports: [BuyersService],   // ✅ make BuyersService available to AdminModule
+  exports: [BuyersService],
 })
 export class BuyersModule {}
 

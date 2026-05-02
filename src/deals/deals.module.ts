@@ -7,19 +7,23 @@ import { MailModule } from "../mail/mail.module"
 import { MongooseModule } from "@nestjs/mongoose"
 import { SellerSchema, Seller } from "../sellers/schemas/seller.schema"
 import { Deal, DealSchema } from "./schemas/deal.schema"
+import { DealActionToken, DealActionTokenSchema } from "./schemas/deal-action-token.schema"
 import { Buyer, BuyerSchema } from "../buyers/schemas/buyer.schema"
+import { TeamMember, TeamMemberSchema } from "../team/schemas/team-member.schema"
 import { DealTrackingModule } from "../deal-tracking/deal-tracking.module"
 
 @Module({
   imports: [
     forwardRef(() => AuthModule),
-    MailModule,
+    forwardRef(() => MailModule),
+    forwardRef(() => DealTrackingModule),
     MongooseModule.forFeature([
       { name: Seller.name, schema: SellerSchema },
       { name: Deal.name, schema: DealSchema },
       { name: Buyer.name, schema: BuyerSchema },
+      { name: TeamMember.name, schema: TeamMemberSchema },
+      { name: DealActionToken.name, schema: DealActionTokenSchema },
     ]),
-    forwardRef(() => DealTrackingModule),
   ],
   controllers: [DealsController],
   providers: [DealsService],

@@ -19,9 +19,11 @@ import {
   Res,
   Query,
 } from "@nestjs/common"
+import { getEffectiveUserId } from "../common/team-utils"
 import { FilesInterceptor } from "@nestjs/platform-express"
-import { diskStorage } from "multer"
+import { memoryStorage } from "multer"
 import { extname } from "path"
+import { randomBytes } from "crypto"
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiParam, ApiBody, ApiConsumes, ApiQuery } from "@nestjs/swagger"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { RolesGuard } from "../auth/guards/roles.guard"
@@ -32,6 +34,7 @@ import { UpdateDealDto } from "./dto/update-deal.dto"
 import { DealResponseDto } from "./dto/deal-response.dto"
 import { Express } from "express"
 import { Response } from 'express'
+import { Throttle } from "@nestjs/throttler"
 
 interface RequestWithUser extends Request {
   user: {
@@ -44,11 +47,14 @@ interface RequestWithUser extends Request {
 interface DocumentInfo {
   filename: string;
   originalName: string;
-  path: string;
+  path?: string;
+  base64Content?: string;
   size: number;
   mimetype: string;
   uploadedAt: Date;
 }
+
+const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024; // 15 MB per file (BSON 16 MB doc limit)
 
 @ApiTags("deals")
 @Controller("deals")
@@ -68,41 +74,24 @@ export class DealsController {
   @Get('marketplace')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List public marketplace deals with buyer status (buyer only)' })
+  @ApiQuery({ name: 'location', required: false, type: String, description: 'Filter by geography/location' })
+  @ApiQuery({ name: 'industry', required: false, type: String, description: 'Filter by industry sector' })
   @ApiResponse({ status: 200, description: 'Public deals list with current buyer status' })
-  async listMarketplaceDeals(@Request() req: RequestWithUser) {
-    const buyerId = req.user?.userId;
-    const deals = await this.dealsService.findPublicDeals();
-    const results: any[] = [];
-    for (const d of deals) {
-      // Skip deals that the buyer has hidden (marked as "not interested")
-      const hiddenByBuyers = Array.isArray(d?.hiddenByBuyers) ? d.hiddenByBuyers.map(String) : [];
-      if (hiddenByBuyers.includes(String(buyerId))) {
-        continue;
-      }
-
-      let currentBuyerStatus: 'none' | 'requested' | 'pending' | 'accepted' | 'rejected' = 'none';
-      let currentBuyerRequested = false;
-      try {
-        const invitation = d?.invitationStatus instanceof Map
-          ? d.invitationStatus.get(buyerId)
-          : d?.invitationStatus?.[buyerId];
-        if (invitation?.response) {
-          currentBuyerStatus = invitation.response;
-        }
-        currentBuyerRequested = Array.isArray(d?.targetedBuyers) && d.targetedBuyers.map(String).includes(String(buyerId));
-      } catch {}
-      if (currentBuyerStatus === 'pending' || currentBuyerStatus === 'accepted' || currentBuyerStatus === 'rejected') {
-        continue;
-      }
-      const doc: any = d as any;
-      const base = typeof doc?.toObject === 'function' ? doc.toObject() : (typeof doc?.toJSON === 'function' ? doc.toJSON() : { ...doc });
-      results.push({
-        ...base,
-        currentBuyerStatus,
-        currentBuyerRequested,
-      });
-    }
-    return results;
+  async listMarketplaceDeals(
+    @Request() req: RequestWithUser,
+    @Query("page") page: number = 1,
+    @Query("limit") limit: number = 20,
+    @Query("location") location?: string,
+    @Query("industry") industry?: string,
+  ) {
+    const buyerId = getEffectiveUserId(req.user);
+    return this.dealsService.findPublicDealsPaginated(
+      buyerId,
+      Number(page),
+      Number(limit),
+      location,
+      industry,
+    );
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -172,18 +161,12 @@ export class DealsController {
       },
     },
   })
-  // @UseInterceptors - DISABLED FOR VERCEL (read-only filesystem)
-  // FilesInterceptor("files", 10, {
-  //   storage: diskStorage({
-  //     destination: "./uploads/deal-documents",
-  //   }),
-  // })
   async create(
     @Body() body: any, // Accept any body type
     @Request() req: RequestWithUser,
   ) {
     
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException('User not authenticated')
     }
 
@@ -202,12 +185,12 @@ export class DealsController {
       }
 
       // File uploads disabled - just create empty documents array
-      const documents = []
+      const documents: any[] = []
 
       // Merge seller and documents into the DTO
       const dealWithSellerAndDocuments: CreateDealDto = {
         ...createDealDto,
-        seller: req.user.userId,
+        seller: getEffectiveUserId(req.user),
         documents,
       }
 
@@ -243,26 +226,47 @@ export class DealsController {
       },
     },
   })
-  // @UseInterceptors - DISABLED FOR VERCEL (read-only filesystem)
+  @UseInterceptors(
+    FilesInterceptor("files", 10, {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_DOCUMENT_BYTES },
+    }),
+  )
   async uploadDocuments(
     @Param("id") dealId: string,
+    @UploadedFiles() files: Express.Multer.File[],
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
-    // Verify the seller owns this deal
     const deal = await this.dealsService.findOne(dealId)
-    if (deal.seller.toString() !== req.user.userId) {
+    if (deal.seller.toString() !== getEffectiveUserId(req.user)) {
       throw new ForbiddenException("You don't have permission to upload documents for this deal")
     }
 
-    // File uploads disabled for Vercel
+    if (!files || files.length === 0) {
+      throw new BadRequestException("No files were uploaded")
+    }
+
+    const documents: DocumentInfo[] = files.map((file) => {
+      const ext = extname(file.originalname)
+      const filename = `${Date.now()}-${randomBytes(8).toString("hex")}${ext}`
+      return {
+        filename,
+        originalName: file.originalname,
+        base64Content: file.buffer.toString("base64"),
+        size: file.size,
+        mimetype: file.mimetype,
+        uploadedAt: new Date(),
+      }
+    })
+
+    const updatedDeal = await this.dealsService.addDocuments(dealId, documents)
     return {
-      error: "File uploads are not supported on Vercel's read-only filesystem",
-      message: "Please use Cloudinary or AWS S3 for file uploads",
-      documentation: "See CLOUDINARY-SETUP.md in the repository"
+      message: "Documents uploaded successfully",
+      documents: updatedDeal.documents,
     }
   }
 
@@ -278,10 +282,10 @@ export class DealsController {
     @Param('id') dealId: string,
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException('User not authenticated');
     }
-    return this.dealsService.requestAccess(dealId, req.user.userId);
+    return this.dealsService.requestAccess(dealId, getEffectiveUserId(req.user));
   }
 
   // Buyer marks a marketplace deal as not interested
@@ -296,10 +300,10 @@ export class DealsController {
     @Param('id') dealId: string,
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException('User not authenticated');
     }
-    return this.dealsService.markNotInterested(dealId, req.user.userId);
+    return this.dealsService.markNotInterested(dealId, getEffectiveUserId(req.user));
   }
 
 // Place static routes before dynamic routes
@@ -381,13 +385,13 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     @Param("documentIndex") documentIndex: string,
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
     // Verify the seller owns this deal
     const deal = await this.dealsService.findOne(dealId)
-    if (deal.seller.toString() !== req.user.userId) {
+    if (deal.seller.toString() !== getEffectiveUserId(req.user)) {
       throw new ForbiddenException("You don't have permission to remove documents from this deal")
     }
 
@@ -428,6 +432,17 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("admin")
+  @Get("admin/tab-counts")
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Get admin tab counts for deals dashboard" })
+  @ApiResponse({ status: 200, description: "Return tab counts" })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search term for deals' })
+  async getAdminTabCounts(@Query('search') search: string = '') {
+    return this.dealsService.getAdminTabCounts(search);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("admin")
   @Get("admin/stats")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get admin dashboard statistics" })
@@ -444,10 +459,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return seller's deals", type: [DealResponseDto] })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
   async findMine(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated");
     }
-    return this.dealsService.findBySeller(req.user.userId);
+    return this.dealsService.findBySeller(getEffectiveUserId(req.user));
   }
 
   @Get("public")
@@ -465,10 +480,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return completed deals", type: [DealResponseDto] })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller or admin role" })
   async getCompletedDeals(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated");
     }
-    return this.dealsService.getCompletedDeals(req.user.userId);
+    return this.dealsService.getCompletedDeals(getEffectiveUserId(req.user));
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -479,10 +494,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return LOI deals", type: [DealResponseDto] })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
   async getLOIDeals(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated");
     }
-    return this.dealsService.getSellerLOIDeals(req.user.userId);
+    return this.dealsService.getSellerLOIDeals(getEffectiveUserId(req.user));
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -491,21 +506,34 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiBearerAuth()
   @ApiOperation({ summary: "Pause a deal for LOI negotiations" })
   @ApiParam({ name: "id", description: "Deal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        loiBuyerId: {
+          type: "string",
+          description: "Optional CIM Amplify buyer ID if LOI is with a CIM buyer",
+        },
+      },
+    },
+  })
   @ApiResponse({ status: 200, description: "Deal paused for LOI successfully" })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   @ApiResponse({ status: 400, description: "Deal must be active to pause for LOI" })
   async pauseDealForLOI(
     @Param("id") dealId: string,
     @Request() req: RequestWithUser,
+    @Body() body: { loiBuyerId?: string },
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated");
     }
 
     const deal = await this.dealsService.moveDealToLOI(
       dealId,
-      req.user.userId,
+      getEffectiveUserId(req.user),
       req.user.role,
+      body?.loiBuyerId,
     );
 
     return {
@@ -527,13 +555,13 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     @Param("id") dealId: string,
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated");
     }
 
     const deal = await this.dealsService.reviveDealFromLOI(
       dealId,
-      req.user.userId,
+      getEffectiveUserId(req.user),
       req.user.role,
     );
 
@@ -552,10 +580,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return deal statistics" })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role" })
   async getDealStatistics(@Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated");
     }
-    return this.dealsService.getDealStatistics(req.user.userId);
+    return this.dealsService.getDealStatistics(getEffectiveUserId(req.user));
   }
 
   @UseGuards(JwtAuthGuard)
@@ -566,12 +594,12 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return the deal", type: DealResponseDto })
   @ApiResponse({ status: 404, description: "Deal not found" })
   async findOne(@Param("id") id: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
     const deal = await this.dealsService.findOne(id)
     const userRole = req.user.role
-    const userId = req.user.userId
+    const userId = getEffectiveUserId(req.user)
 
     if (
       userRole === "admin" ||
@@ -595,13 +623,13 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   @ApiResponse({ status: 404, description: "Deal not found" })
   async getMatchingBuyers(@Param("id") id: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
     // First verify the seller owns this deal
     const deal = await this.dealsService.findOne(id)
-    if (deal.seller.toString() !== req.user.userId) {
+    if (deal.seller.toString() !== getEffectiveUserId(req.user)) {
       throw new ForbiddenException("You don't have permission to access this deal's matching buyers")
     }
 
@@ -617,13 +645,13 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return buyer interactions for the deal" })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   async getDealBuyerInteractions(@Param("id") dealId: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
     // Verify the seller owns this deal
     const deal = await this.dealsService.findOne(dealId)
-    if (deal.seller.toString() !== req.user.userId) {
+    if (deal.seller.toString() !== getEffectiveUserId(req.user)) {
       throw new ForbiddenException("You don't have permission to view interactions for this deal")
     }
 
@@ -639,13 +667,13 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return list of buyers who ever had this deal in Active" })
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   async getEverActiveBuyers(@Param("id") dealId: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
     // Verify the seller owns this deal
     const deal = await this.dealsService.findOne(dealId)
-    if (deal.seller.toString() !== req.user.userId) {
+    if (deal.seller.toString() !== getEffectiveUserId(req.user)) {
       throw new ForbiddenException("You don't have permission to access this deal's buyers")
     }
 
@@ -660,7 +688,7 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "List of completed deals", type: [DealResponseDto] })
   @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
   async getAllCompletedDeals(@Request() req: RequestWithUser) {
-    if (!req.user?.userId || req.user.role !== "admin") {
+    if (!getEffectiveUserId(req.user) || req.user.role !== "admin") {
       throw new UnauthorizedException("Access denied: admin only.");
     }
 
@@ -676,7 +704,7 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 200, description: "Return list of buyers who ever had this deal in Active" })
   @ApiResponse({ status: 403, description: "Forbidden - requires admin role" })
   async getEverActiveBuyersAdmin(@Param("id") dealId: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId || req.user.role !== "admin") {
+    if (!getEffectiveUserId(req.user) || req.user.role !== "admin") {
       throw new UnauthorizedException("Access denied: admin only.")
     }
 
@@ -700,7 +728,7 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     @Param("id") dealId: string,
     @Request() req: RequestWithUser
   ) {
-    const userId = req.user?.userId;
+    const userId = getEffectiveUserId(req.user);
     const role = req.user?.role;
   
     if (!userId) {
@@ -719,16 +747,31 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   }
   
   @Get(':dealId/document/:filename')
-  @UseGuards(JwtAuthGuard)
-  async downloadDocument(@Param('dealId') dealId: string, @Param('filename') filename: string, @Res() res: Response) {
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'seller', 'seller-member', 'buyer', 'buyer-member')
+  @ApiBearerAuth()
+  async downloadDocument(
+    @Param('dealId') dealId: string,
+    @Param('filename') filename: string,
+    @Request() req: RequestWithUser,
+    @Res() res: Response,
+  ) {
     try {
-      const fileStream = await this.dealsService.getDocumentFile(dealId, filename);
+      const userId = getEffectiveUserId(req.user);
+      if (!userId) {
+        throw new UnauthorizedException("User not authenticated");
+      }
+      const file = await this.dealsService.getDocumentFile(dealId, filename, userId, req.user.role);
       res.set({
-        'Content-Type': fileStream.mimetype,
-        'Content-Disposition': `attachment; filename="${fileStream.originalName}"`,
+        'Content-Type': file.mimetype,
+        'Content-Disposition': `attachment; filename="${file.originalName}"`,
+        'Content-Length': file.buffer.length.toString(),
       });
-      fileStream.stream.pipe(res);
+      res.send(file.buffer);
     } catch (error) {
+      if (error instanceof ForbiddenException) {
+        throw new HttpException(error.message, HttpStatus.FORBIDDEN);
+      }
       throw new HttpException(error.message, HttpStatus.NOT_FOUND);
     }
   }
@@ -743,10 +786,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   @ApiResponse({ status: 404, description: "Deal not found" })
   async update(@Param("id") id: string, @Request() req: RequestWithUser, @Body() updateDealDto: UpdateDealDto) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
-    return this.dealsService.update(id, req.user.userId, updateDealDto, req.user.role)
+    return this.dealsService.update(id, getEffectiveUserId(req.user), updateDealDto, req.user.role)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -775,13 +818,13 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     @Body() body: { buyerIds: string[] },
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
     // First verify the seller owns this deal
     const deal = await this.dealsService.findOne(id)
-    if (deal.seller.toString() !== req.user.userId) {
+    if (deal.seller.toString() !== getEffectiveUserId(req.user)) {
       throw new ForbiddenException("You don't have permission to target buyers for this deal")
     }
 
@@ -810,6 +853,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
           type: "string",
           description: "ID of the buyer who won the deal",
         },
+        buyerFromCIM: {
+          type: "boolean",
+          description: "Whether the selected buyer came from CIM Amplify",
+        },
       },
     },
   })
@@ -817,20 +864,21 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   async closeDealBySeller(
     @Param("id") dealId: string,
-    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string },
+    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string; buyerFromCIM?: boolean },
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
     const closedDeal = await this.dealsService.closeDealseller(
       dealId,
-      req.user.userId,
+      getEffectiveUserId(req.user),
       body.finalSalePrice,
       body.notes,
       body.winningBuyerId,
       req.user.role,
+      body.buyerFromCIM,
     )
 
     return {
@@ -868,11 +916,11 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     @Request() req: RequestWithUser,
     @Body() body: { status: "pending" | "active" | "rejected"; notes?: string },
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
-    return this.dealsService.updateDealStatusByBuyer(dealId, req.user.userId, body.status, body.notes)
+    return this.dealsService.updateDealStatusByBuyer(dealId, getEffectiveUserId(req.user), body.status, body.notes)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -885,10 +933,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   @ApiResponse({ status: 404, description: "Deal not found" })
   async remove(@Param("id") id: string, @Request() req: RequestWithUser) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
-    await this.dealsService.remove(id, req.user.userId, req.user.role)
+    await this.dealsService.remove(id, getEffectiveUserId(req.user), req.user.role)
     return { message: "Deal deleted successfully" }
   }
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -913,6 +961,10 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
           type: "string",
           description: "ID of the buyer who won the deal",
         },
+        buyerFromCIM: {
+          type: "boolean",
+          description: "Whether the selected buyer came from CIM Amplify",
+        },
       },
     },
   })
@@ -920,21 +972,22 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
   @ApiResponse({ status: 403, description: "Forbidden - requires seller role and ownership" })
   async closeDeal(
     @Param("id") dealId: string,
-    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string },
+    @Body() body: { finalSalePrice?: number; notes?: string; winningBuyerId?: string; buyerFromCIM?: boolean },
     @Request() req: RequestWithUser,
   ) {
-    if (!req.user?.userId) {
+    if (!getEffectiveUserId(req.user)) {
       throw new UnauthorizedException("User not authenticated")
     }
 
     try {
       const closedDeal = await this.dealsService.closeDealseller(
         dealId,
-        req.user.userId,
+        getEffectiveUserId(req.user),
         body.finalSalePrice,
         body.notes,
         body.winningBuyerId,
         req.user.role,
+        body.buyerFromCIM,
       )
 
       return {
@@ -944,6 +997,100 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     } catch (error) {
       throw error
     }
+  }
+
+  // ── Public endpoint (no auth) for email-based deal actions ──
+
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post("email-action/:token")
+  @ApiOperation({ summary: "Handle deal action from email link (no login required)" })
+  @ApiParam({ name: "token", description: "Unique action token from the email" })
+  @ApiQuery({ name: "action", enum: ["activate", "pass", "loi", "off-market", "flag-inactive"], description: "The action to perform" })
+  @ApiBody({
+    required: false,
+    schema: {
+      type: "object",
+      properties: {
+        buyerFromCIM: { type: "boolean", description: "Whether the deal closed/paused with a CIM Amplify buyer" },
+        winningBuyerId: { type: "string", description: "Selected buyer for off-market close (only when buyerFromCIM is true)" },
+        loiBuyerId: { type: "string", description: "Selected buyer for LOI pause (only when buyerFromCIM is true)" },
+        finalSalePrice: { type: "number", description: "Final sale price (off-market close only)" },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: "Action completed successfully" })
+  @ApiResponse({ status: 400, description: "Invalid action or expired token" })
+  @ApiResponse({ status: 404, description: "Token not found" })
+  @ApiResponse({ status: 429, description: "Too many requests" })
+  async handleEmailAction(
+    @Param("token") token: string,
+    @Query("action") action: 'activate' | 'pass' | 'loi' | 'off-market' | 'flag-inactive',
+    @Request() req: any,
+    @Body() body: {
+      buyerFromCIM?: boolean
+      winningBuyerId?: string
+      loiBuyerId?: string
+      finalSalePrice?: number
+    } = {},
+  ) {
+    if (!["activate", "pass", "loi", "off-market", "flag-inactive"].includes(action)) {
+      throw new BadRequestException("Invalid action. Must be one of 'activate', 'pass', 'loi', 'off-market', or 'flag-inactive'.")
+    }
+
+    const ip = req.headers['x-forwarded-for'] || req.ip || 'unknown';
+    const userAgent = req.headers['user-agent'] || 'unknown';
+
+    return this.dealsService.handleEmailAction(token, action, ip, userAgent, body || {})
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Get("email-action/:token/buyers")
+  @ApiOperation({ summary: "List buyers eligible for LOI / Off Market selection from an email action token (no login required)" })
+  @ApiParam({ name: "token", description: "Unique action token from the email" })
+  @ApiResponse({ status: 200, description: "List of ever-active buyers for the deal" })
+  @ApiResponse({ status: 400, description: "Invalid or unsupported token" })
+  @ApiResponse({ status: 404, description: "Token not found" })
+  async listBuyersForEmailAction(
+    @Param("token") token: string,
+    @Request() req: any,
+  ) {
+    const ip = req.headers['x-forwarded-for'] || req.ip || 'unknown';
+    return this.dealsService.getEverActiveBuyersByActionToken(token, ip)
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @Get("email-action/:token/status")
+  @ApiOperation({ summary: "Check whether an email action token has already been consumed (no login required)" })
+  @ApiParam({ name: "token", description: "Unique action token from the email" })
+  @ApiResponse({ status: 200, description: "Token status (used / unused) and previously-taken action" })
+  @ApiResponse({ status: 400, description: "Invalid or expired token" })
+  @ApiResponse({ status: 404, description: "Token not found" })
+  async getEmailActionTokenStatus(
+    @Param("token") token: string,
+    @Request() req: any,
+  ) {
+    const ip = req.headers['x-forwarded-for'] || req.ip || 'unknown';
+    return this.dealsService.getEmailActionTokenStatus(token, ip)
+  }
+
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @Get("nda/:token")
+  @ApiOperation({ summary: "Download the NDA document for a deal via a signed email link (no login required)" })
+  @ApiParam({ name: "token", description: "Signed NDA download token from an introduction or invitation email" })
+  @ApiResponse({ status: 200, description: "NDA file streamed as an attachment" })
+  @ApiResponse({ status: 400, description: "Invalid or expired token" })
+  @ApiResponse({ status: 404, description: "Deal or NDA not found" })
+  async downloadNdaByToken(
+    @Param("token") token: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename, mimetype } = await this.dealsService.getNdaForDownload(token);
+    const safeFilename = (filename || 'NDA').replace(/[\r\n"]/g, '');
+    res.setHeader('Content-Type', mimetype);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    res.setHeader('Content-Length', buffer.length.toString());
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.end(buffer);
   }
 
 }

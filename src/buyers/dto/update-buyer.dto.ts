@@ -57,4 +57,14 @@ export class UpdateBuyerDto extends PartialType(CreateBuyerDto) {
     @IsOptional()
     @IsString()
     profilePicture?: string | null
+
+    @ApiProperty({
+        description: "Buyer email preferences",
+        required: false,
+        example: { receiveDealEmails: true },
+    })
+    @IsOptional()
+    preferences?: {
+        receiveDealEmails?: boolean
+    }
 }

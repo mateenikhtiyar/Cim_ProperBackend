@@ -1,0 +1,14 @@
+CRITICAL FIX NEEDED:
+
+The @UseInterceptors with diskStorage is evaluated at MODULE LOAD TIME.
+This causes the error even before any request is made.
+
+We need to:
+1. Remove @UseInterceptors decorators from create() and uploadDocuments()
+2. Make these endpoints return error messages instead
+
+Lines to fix:
+- Line 164: @UseInterceptors in create()
+- Line 252: @UseInterceptors in uploadDocuments()
+
+Quick fix: Comment out the entire @UseInterceptors(...) blocks

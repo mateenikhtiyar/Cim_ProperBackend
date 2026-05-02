@@ -1,5 +1,7 @@
-import { IsEmail, IsNotEmpty, MinLength, IsString, IsOptional } from "class-validator"
+import { IsEmail, IsNotEmpty, MinLength, IsString, Matches } from "class-validator"
 import { ApiProperty } from "@nestjs/swagger"
+
+const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).+$/
 
 export class CreateAdminDto {
   @ApiProperty({ example: "Admin User", description: "Full name of the admin" })
@@ -11,10 +13,14 @@ export class CreateAdminDto {
   @IsEmail()
   email: string
 
-  @ApiProperty({ example: "password123", description: "Password with minimum length of 6 characters" })
+  @ApiProperty({ example: "StrongPass123!", description: "Password must be at least 8 characters and include uppercase, lowercase, number, and special character" })
   @IsNotEmpty()
-  @MinLength(6)
+  @MinLength(8)
+  @Matches(STRONG_PASSWORD_REGEX, {
+    message: "Password must include uppercase, lowercase, number, and special character",
+  })
   password: string
 
 
 }
+

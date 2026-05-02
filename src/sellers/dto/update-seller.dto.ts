@@ -77,4 +77,13 @@ export class UpdateSellerDto {
   @IsOptional()
   @IsString()
   profilePicture?: string | null;
+
+  @ApiPropertyOptional({
+    description: "Seller email preferences",
+    example: { receiveDealEmails: true },
+  })
+  @IsOptional()
+  preferences?: {
+    receiveDealEmails?: boolean
+  };
 }

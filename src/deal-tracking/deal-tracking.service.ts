@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common"
+import { Injectable, Logger, NotFoundException } from "@nestjs/common"
 import { Model, PipelineStage } from "mongoose"
 import { DealTracking, DealTrackingDocument, InteractionType } from "./schemas/deal-tracking.schema"
 import { CreateDealTrackingDto } from "./dto/create-deal-tracking.dto"
@@ -13,6 +13,8 @@ interface DealDocument {
 
 @Injectable()
 export class DealTrackingService {
+  private readonly logger = new Logger(DealTrackingService.name);
+
   constructor(
     @InjectModel(DealTracking.name)
     private dealTrackingModel: Model<DealTrackingDocument>,
@@ -191,7 +193,7 @@ export class DealTrackingService {
         notes: notes || "Deal rejected",
       })
     } catch (error) {
-      console.error('Error in logRejection:', error)
+      this.logger.error('Error in logRejection:', error instanceof Error ? error.message : String(error))
       throw error
     }
   }
