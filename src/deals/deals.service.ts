@@ -4104,13 +4104,53 @@ export class DealsService {
       this.buyerModel.countDocuments({
         createdAt: { $gte: startOfCurrentWeek },
       }).exec(),
-      // Active deals financial totals
+      // Active deals financial totals.
+      // "Active" matches the Accepted Deals definition used elsewhere on the
+      // admin overview: not completed/loi, with at least one accepted buyer
+      // in invitationStatus. Mirrors findAllAdminOptimized's buyerResponse=accepted
+      // branch.
       this.dealModel.aggregate([
-        { $match: { status: 'active' } },
+        {
+          $match: {
+            status: { $nin: ['completed', 'loi'] },
+            $expr: {
+              $gt: [
+                {
+                  $size: {
+                    $filter: {
+                      input: { $objectToArray: { $ifNull: ['$invitationStatus', {}] } },
+                      as: 'item',
+                      cond: { $eq: ['$$item.v.response', 'accepted'] },
+                    },
+                  },
+                },
+                0,
+              ],
+            },
+          },
+        },
         { $group: { _id: null, total: { $sum: { $ifNull: ['$financialDetails.trailingRevenueAmount', 0] } } } },
       ]).exec(),
       this.dealModel.aggregate([
-        { $match: { status: 'active' } },
+        {
+          $match: {
+            status: { $nin: ['completed', 'loi'] },
+            $expr: {
+              $gt: [
+                {
+                  $size: {
+                    $filter: {
+                      input: { $objectToArray: { $ifNull: ['$invitationStatus', {}] } },
+                      as: 'item',
+                      cond: { $eq: ['$$item.v.response', 'accepted'] },
+                    },
+                  },
+                },
+                0,
+              ],
+            },
+          },
+        },
         { $group: { _id: null, total: { $sum: { $ifNull: ['$financialDetails.trailingEBITDAAmount', 0] } } } },
       ]).exec(),
       // System-wide totals across all deals
