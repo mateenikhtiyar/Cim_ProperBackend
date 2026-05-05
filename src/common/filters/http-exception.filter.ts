@@ -104,10 +104,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         timestamp: new Date().toISOString(),
       });
     } else if (status >= 400) {
-      // Log 4xx errors at warn level
-      this.logger.warn(
-        `[${request.method}] ${request.url} - ${status} - ${JSON.stringify(message)}`,
-      );
+      // Suppress noisy 404s for stale /uploads/ paths (legacy file-based storage)
+      const isStaleUpload = status === 404 && request.url.startsWith('/uploads/');
+      if (!isStaleUpload) {
+        this.logger.warn(
+          `[${request.method}] ${request.url} - ${status} - ${JSON.stringify(message)}`,
+        );
+      }
     }
 
     // Send standardized error response
