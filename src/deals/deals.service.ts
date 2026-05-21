@@ -1903,10 +1903,26 @@ export class DealsService {
 
     const existingTargets = deal.targetedBuyers.map((id) => id.toString());
     const newTargets = eligibleBuyerIds.filter((id) => !existingTargets.includes(id));
+
+    // Idempotency cooldown: skip resending an invite to a buyer whose last invite
+    // went out in the last 30 seconds. Resends are a legitimate feature (advisor
+    // can re-invite a non-responsive buyer) but a duplicate API call from a
+    // double-click would otherwise send the invite email twice within seconds.
+    const INVITE_RESEND_COOLDOWN_MS = 30_000;
+    const now = Date.now();
     const resendEligibleExistingTargets = eligibleBuyerIds.filter((id) => {
       if (!existingTargets.includes(id)) return false;
       const invitation = deal.invitationStatus?.get(id as any);
-      return invitation?.response === "pending" || invitation?.response === "requested";
+      const isResendable = invitation?.response === "pending" || invitation?.response === "requested";
+      if (!isResendable) return false;
+      const lastInvitedAt = invitation?.invitedAt ? new Date(invitation.invitedAt as any).getTime() : 0;
+      if (now - lastInvitedAt < INVITE_RESEND_COOLDOWN_MS) {
+        this.logger.warn(
+          `targetDealToBuyers cooldown skip: deal=${dealId} buyer=${id} invited ${now - lastInvitedAt}ms ago`,
+        );
+        return false;
+      }
+      return true;
     });
     const inviteBuyerIds = Array.from(new Set([...newTargets, ...resendEligibleExistingTargets]));
 
@@ -1919,8 +1935,18 @@ export class DealsService {
           response: "pending",
         });
       }
+    }
 
-      // Save deal FIRST so targeting is persisted regardless of email outcome
+    // Bump invitedAt for resends too, so the cooldown above works on subsequent calls.
+    for (const buyerId of resendEligibleExistingTargets) {
+      const existing = deal.invitationStatus?.get(buyerId as any);
+      if (existing) {
+        deal.invitationStatus.set(buyerId, { ...existing, invitedAt: new Date() });
+      }
+    }
+
+    if (newTargets.length > 0 || resendEligibleExistingTargets.length > 0) {
+      // Save deal FIRST so targeting / invitedAt is persisted regardless of email outcome
       deal.timeline.updatedAt = new Date();
       await deal.save();
       await this.syncBuyerDealCountsForDeal(deal);
@@ -1935,14 +1961,6 @@ export class DealsService {
       } catch (err) {
         this.logger.error(`Email sending failed for deal ${dealIdStr}: ${err.message}`);
         // Deal is already saved — don't fail the whole request over email errors
-      }
-    } else if (inviteBuyerIds.length > 0) {
-      const dealIdStr =
-        deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
-      try {
-        await this.sendBuyerInviteEmails(deal, inviteBuyerIds, dealIdStr);
-      } catch (err) {
-        this.logger.error(`Invite resend failed for deal ${dealIdStr}: ${err.message}`);
       }
     }
 
@@ -2165,6 +2183,19 @@ export class DealsService {
 
       // Update invitation status
       const currentInvitation = dealDoc.invitationStatus.get(buyerId)
+
+      // Idempotency: if the buyer's response already matches the requested target,
+      // skip the save + tracking insert + intro emails. Without this, a buyer
+      // double-clicking "Accept" sends the advisor introduction email twice (and
+      // the same NDA-bearing buyer email twice).
+      const targetResponse = status === "active" ? "accepted" : status
+      if (currentInvitation?.response === targetResponse) {
+        this.logger.warn(
+          `updateDealStatusByBuyer no-op: deal=${dealId} buyer=${buyerId} already ${targetResponse}; skipping duplicate.`,
+        )
+        return { deal: dealDoc, tracking: null, message: `Deal status already ${status}` }
+      }
+
       const preserveAdvisorFlag = status === "active" && currentInvitation?.flaggedInactive
       const flagFields = preserveAdvisorFlag
         ? {
@@ -3377,6 +3408,16 @@ export class DealsService {
       ? deal.invitationStatus.get(String(buyerId))
       : (deal.invitationStatus as any)?.[String(buyerId)];
 
+    // Idempotency: if the buyer is already flagged inactive, skip the save and
+    // the "marked you as inactive" email. Otherwise rapid duplicate clicks send
+    // the same notice multiple times to the buyer.
+    if (current?.flaggedInactive === true) {
+      this.logger.warn(
+        `flagInterestedBuyerInactive no-op: deal=${dealId} buyer=${buyerId} already flagged inactive; skipping duplicate.`,
+      );
+      return deal;
+    }
+
     const updatedStatus = {
       invitedAt: current?.invitedAt,
       respondedAt: current?.respondedAt,
@@ -4421,19 +4462,40 @@ export class DealsService {
     userRole?: string,
     loiBuyerId?: string,
   ): Promise<Deal> {
-    const dealDoc = await this.dealModel.findById(dealId).exec();
-    if (!dealDoc) {
+    // Permission check needs the current document — load it once up front.
+    const existingDeal = await this.dealModel.findById(dealId).select('seller status').lean().exec();
+    if (!existingDeal) {
       throw new NotFoundException(`Deal with ID "${dealId}" not found`);
     }
-
-    // Only check seller for sellers; allow admin
-    if (userRole !== 'admin' && dealDoc.seller.toString() !== userId) {
+    if (userRole !== 'admin' && existingDeal.seller.toString() !== userId) {
       throw new ForbiddenException("You don't have permission to modify this deal");
     }
 
-    // Can only move active deals to LOI
-    if (dealDoc.status !== DealStatus.ACTIVE && dealDoc.status !== DealStatus.DRAFT) {
-      throw new BadRequestException(`Deal must be active or draft to be paused for LOI. Current status: ${dealDoc.status}`);
+    // Atomic claim: only the first concurrent caller flips status -> LOI.
+    // Duplicate calls (double-clicks, retries) return the existing deal without
+    // re-sending the LOI pause emails to advisors and buyers.
+    const claimResult = await this.dealModel.updateOne(
+      { _id: dealId, status: { $in: [DealStatus.ACTIVE, DealStatus.DRAFT] } },
+      { $set: { status: DealStatus.LOI } },
+    ).exec();
+
+    if (claimResult.matchedCount === 0) {
+      const current = await this.dealModel.findById(dealId).exec();
+      if (!current) {
+        throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+      }
+      if (current.status === DealStatus.LOI) {
+        this.logger.warn(
+          `moveDealToLOI called on already-LOI deal ${dealId} by user ${userId}; skipping duplicate.`,
+        );
+        return current;
+      }
+      throw new BadRequestException(`Deal must be active or draft to be paused for LOI. Current status: ${current.status}`);
+    }
+
+    const dealDoc = await this.dealModel.findById(dealId).exec();
+    if (!dealDoc) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
     }
 
     dealDoc.status = DealStatus.LOI;
@@ -4634,19 +4696,39 @@ export class DealsService {
     userId: string,
     userRole?: string,
   ): Promise<Deal> {
-    const dealDoc = await this.dealModel.findById(dealId).exec();
-    if (!dealDoc) {
+    // Permission check needs the current document — load it once up front.
+    const existingDeal = await this.dealModel.findById(dealId).select('seller status').lean().exec();
+    if (!existingDeal) {
       throw new NotFoundException(`Deal with ID "${dealId}" not found`);
     }
-
-    // Only check seller for sellers; allow admin
-    if (userRole !== 'admin' && dealDoc.seller.toString() !== userId) {
+    if (userRole !== 'admin' && existingDeal.seller.toString() !== userId) {
       throw new ForbiddenException("You don't have permission to modify this deal");
     }
 
-    // Can only revive LOI deals
-    if (dealDoc.status !== DealStatus.LOI) {
-      throw new BadRequestException(`Deal must be in LOI status to be revived. Current status: ${dealDoc.status}`);
+    // Atomic claim: only the first concurrent caller flips status LOI -> ACTIVE.
+    // Duplicate calls return the existing deal without re-sending revive emails.
+    const claimResult = await this.dealModel.updateOne(
+      { _id: dealId, status: DealStatus.LOI },
+      { $set: { status: DealStatus.ACTIVE } },
+    ).exec();
+
+    if (claimResult.matchedCount === 0) {
+      const current = await this.dealModel.findById(dealId).exec();
+      if (!current) {
+        throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+      }
+      if (current.status === DealStatus.ACTIVE) {
+        this.logger.warn(
+          `reviveDealFromLOI called on already-active deal ${dealId} by user ${userId}; skipping duplicate.`,
+        );
+        return current;
+      }
+      throw new BadRequestException(`Deal must be in LOI status to be revived. Current status: ${current.status}`);
+    }
+
+    const dealDoc = await this.dealModel.findById(dealId).exec();
+    if (!dealDoc) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
     }
 
     dealDoc.status = DealStatus.ACTIVE;
