@@ -2839,18 +2839,43 @@ export class DealsService {
     userRole?: string,
     buyerFromCIM?: boolean,
   ): Promise<Deal> {
+    // Permission check needs the current document — load it once up front.
+    const existingDeal = await this.dealModel.findById(dealId).select('seller status').lean().exec();
+    if (!existingDeal) {
+      throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+    }
+    if (userRole !== 'admin' && existingDeal.seller.toString() !== userId) {
+      throw new ForbiddenException("You don't have permission to close this deal");
+    }
+
+    // Atomic claim: only the first concurrent caller flips status -> COMPLETED.
+    // Everyone else sees matchedCount === 0 and returns the existing deal without
+    // re-running side effects. Without this, rapid duplicate calls (double-clicks,
+    // retried requests, multiple browser tabs) resend the "deal is now off market"
+    // notice to every active/pending buyer once per call.
+    const claimResult = await this.dealModel.updateOne(
+      { _id: dealId, status: { $ne: DealStatus.COMPLETED } },
+      { $set: { status: DealStatus.COMPLETED } },
+    ).exec();
+
+    if (claimResult.matchedCount === 0) {
+      this.logger.warn(
+        `closeDealseller called on already-completed deal ${dealId} by user ${userId}; skipping duplicate close.`,
+      );
+      const alreadyCompleted = await this.dealModel.findById(dealId).exec();
+      if (!alreadyCompleted) {
+        throw new NotFoundException(`Deal with ID "${dealId}" not found`);
+      }
+      return alreadyCompleted;
+    }
+
     const dealDoc = await this.dealModel.findById(dealId).exec();
     if (!dealDoc) {
       throw new NotFoundException(`Deal with ID "${dealId}" not found`);
     }
 
-    // Only check seller for sellers; allow admin
-    if (userRole !== 'admin' && dealDoc.seller.toString() !== userId) {
-      throw new ForbiddenException("You don't have permission to close this deal");
-    }
-
-    // Track if this was an LOI deal before closing
-    const wasLOIDeal = dealDoc.status === DealStatus.LOI;
+    // Track if this was an LOI deal before closing (read from the pre-claim snapshot).
+    const wasLOIDeal = existingDeal.status === DealStatus.LOI;
 
     dealDoc.status = DealStatus.COMPLETED;
 
