@@ -3029,19 +3029,24 @@ export class DealsService {
 
       if (seller && winningBuyer) {
         const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
-        // Email to Advisor (Seller)
+        // Email to Advisor (Seller). Isolated so a failure cannot cancel the
+        // owner email below or the buyer notifications further down.
         const advisorSubject = `Thank you for using CIM Amplify!`;
         const advisorContent = `
           <p>Thank you so much for posting your deal on CIM Amplify! We will be in touch to send you your reward once we have contacted the buyer. This process should not take long but feel free to contact us anytime for an update.</p>
           <p>We hope that you will post with us again soon!</p>
         `;
-        await this.sendSellerDealEmail(
-          seller,
-          advisorSubject,
-          advisorContent,
-          [ILLUSTRATION_ATTACHMENT], // attachments
-          dealIdStr, // relatedDealId
-        );
+        try {
+          await this.sendSellerDealEmail(
+            seller,
+            advisorSubject,
+            advisorContent,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        } catch (advisorErr) {
+          this.logger.error(`Off-market advisor thank-you email failed for deal ${dealIdStr}: ${this.formatError(advisorErr)}`);
+        }
 
         // Email to Buyer
         // const buyerSubject = `Congratulations on your new acquisition!`;
@@ -3069,14 +3074,18 @@ export class DealsService {
           <p><b>Buyer Company:</b> ${winningBuyer.companyName}</p>
           <p><b>Buyer Email:</b> ${winningBuyer.email}</p>
         `);
-        await this.mailService.sendEmailWithLogging(
-          getAdminNotificationEmail(),
-          'admin',
-          ownerSubject,
-          ownerHtmlBody,
-          [ILLUSTRATION_ATTACHMENT],
-          dealIdStr,
-        );
+        try {
+          await this.mailService.sendEmailWithLogging(
+            getAdminNotificationEmail(),
+            'admin',
+            ownerSubject,
+            ownerHtmlBody,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        } catch (ownerErr) {
+          this.logger.error(`Off-market owner email failed for deal ${dealIdStr}: ${this.formatError(ownerErr)}`);
+        }
       }
     } else {
       // Phase 4.2: When a deal goes off market (not sold)
@@ -3088,14 +3097,17 @@ export class DealsService {
           <p>We apologize deeply for not helping much with this deal! Fortunately we are adding new buyers daily and we hope that you will post with us again soon! Enjoy your gift card as our appreciation of your hard work.</p>
         `;
         const dealIdStr = (dealDoc._id instanceof Types.ObjectId) ? dealDoc._id.toHexString() : String(dealDoc._id);
-        await this.sendSellerDealEmail(
-          seller,
-          subject,
-          content,
-          [ILLUSTRATION_ATTACHMENT], // attachments
-          dealIdStr,
-        );
-
+        try {
+          await this.sendSellerDealEmail(
+            seller,
+            subject,
+            content,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        } catch (sellerErr) {
+          this.logger.error(`Off-market not-sold thank-you email failed for deal ${dealIdStr}: ${this.formatError(sellerErr)}`);
+        }
       }
     }
 
@@ -3124,45 +3136,58 @@ export class DealsService {
         if (buyerIdsToNotify.length > 0) {
           const buyers = await this.buyerModel.find({ _id: { $in: buyerIdsToNotify } }).exec();
 
-          for (const buyer of buyers) {
-            const buyerStatus = invitationStatus.get(buyer._id.toString());
-            const wasActive = buyerStatus?.response === 'accepted';
-            const wasPending = buyerStatus?.response === 'pending';
+          // Per-recipient settle so a single failed send (Gmail rate limit,
+          // transient SMTP error, bad address) does not silently skip every
+          // remaining buyer in the loop. sendEmailWithLogging already enqueues
+          // its own retry on failure, so the rejection here just keeps us moving.
+          const sendResults = await Promise.allSettled(
+            buyers.map(async (buyer) => {
+              const buyerStatus = invitationStatus.get(buyer._id.toString());
+              const wasActive = buyerStatus?.response === 'accepted';
+              const wasPending = buyerStatus?.response === 'pending';
 
-            const subject = `Deal Update: ${dealDoc.title} is now off market`;
-            
-            let emailContent = '';
-            if (wasActive) {
-              // Email for Active Buyers
-              emailContent = `
-                <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.Thank you for reviewing this deal!</p>
-                <p>We will send you an email when you are invited to participate in new deals and there are lots of in Marketplace for you to review.</p>
-                <p>If you have deals sitting in Pending please respond ASAP as advisors are waiting for your response.</p>
-                ${emailButton('View Available Deals', `${getFrontendUrl()}/buyer/deals`)}
-                <p>Stay tuned for more opportunities!</p>
-              `;
-            } else if (wasPending) {
-              // Email for Pending Buyers
-              emailContent = `
-                <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.</p>
-                <p>This deal was in your Pending Deals. Please make sure to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
-                <p>Check out other available deals on your dashboard. Also, check out Marketplace on your dashboard for deals that Advisors have posted to all CIM Amplify Members.</p>
-                ${emailButton('View Available Deals', `${getFrontendUrl()}/buyer/deals`)}
-                <p>Stay tuned for more opportunities!</p>
-              `;
+              const subject = `Deal Update: ${dealDoc.title} is now off market`;
+
+              let emailContent = '';
+              if (wasActive) {
+                emailContent = `
+                  <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.Thank you for reviewing this deal!</p>
+                  <p>We will send you an email when you are invited to participate in new deals and there are lots of in Marketplace for you to review.</p>
+                  <p>If you have deals sitting in Pending please respond ASAP as advisors are waiting for your response.</p>
+                  ${emailButton('View Available Deals', `${getFrontendUrl()}/buyer/deals`)}
+                  <p>Stay tuned for more opportunities!</p>
+                `;
+              } else if (wasPending) {
+                emailContent = `
+                  <p>We wanted to let you know that <strong>${dealDoc.title}</strong> is now off market.</p>
+                  <p>This deal was in your Pending Deals. Please make sure to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
+                  <p>Check out other available deals on your dashboard. Also, check out Marketplace on your dashboard for deals that Advisors have posted to all CIM Amplify Members.</p>
+                  ${emailButton('View Available Deals', `${getFrontendUrl()}/buyer/deals`)}
+                  <p>Stay tuned for more opportunities!</p>
+                `;
+              }
+
+              const htmlBody = genericEmailTemplate(subject, getFirstName(buyer.fullName), emailContent);
+
+              return this.mailService.sendEmailWithLogging(
+                buyer.email,
+                'buyer',
+                subject,
+                htmlBody,
+                [ILLUSTRATION_ATTACHMENT],
+                dealIdStr,
+              );
+            }),
+          );
+
+          sendResults.forEach((result, idx) => {
+            if (result.status === 'rejected') {
+              const failedBuyer = buyers[idx];
+              this.logger.error(
+                `Off-market email failed for buyer ${failedBuyer?.email || 'unknown'} (deal=${dealIdStr}): ${this.formatError(result.reason)}`,
+              );
             }
-
-            const htmlBody = genericEmailTemplate(subject, getFirstName(buyer.fullName), emailContent);
-
-            await this.mailService.sendEmailWithLogging(
-              buyer.email,
-              'buyer',
-              subject,
-              htmlBody,
-              [ILLUSTRATION_ATTACHMENT],
-              dealIdStr,
-            );
-          }
+          });
         }
       }
     } catch (error) {
@@ -4607,7 +4632,8 @@ export class DealsService {
         ? `<p><strong>LOI Buyer (CIM Amplify):</strong> ${dealDoc.loiWithBuyerCompany || 'N/A'} (${dealDoc.loiWithBuyerEmail || 'N/A'})</p>`
         : `<p><strong>LOI Buyer:</strong> Not from CIM Amplify</p>`;
 
-      // Email to Project Owner
+      // Email to Project Owner. Isolated so a failure here cannot cancel the
+      // advisor/buyer notifications that follow.
       const ownerSubject = `Deal Paused for LOI: ${dealDoc.title}`;
       const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
         <p>A deal has been paused for Letter of Intent (LOI) negotiations.</p>
@@ -4618,16 +4644,21 @@ export class DealsService {
         ${activeBuyersHtml}
         ${pendingBuyersHtml}
       `);
-      await this.mailService.sendEmailWithLogging(
-        getAdminNotificationEmail(),
-        'admin',
-        ownerSubject,
-        ownerHtmlBody,
-        [ILLUSTRATION_ATTACHMENT],
-        dealIdStr,
-      );
+      try {
+        await this.mailService.sendEmailWithLogging(
+          getAdminNotificationEmail(),
+          'admin',
+          ownerSubject,
+          ownerHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      } catch (ownerErr) {
+        this.logger.error(`LOI owner email failed for deal ${dealIdStr}: ${this.formatError(ownerErr)}`);
+      }
 
-      // Email to Advisor (Seller)
+      // Email to Advisor (Seller). sendSellerDealEmail uses Promise.allSettled
+      // internally, but wrap defensively in case it throws on lookup errors.
       if (seller) {
         const advisorSubject = `Your Deal Has Been Paused for LOI`;
         const advisorContent = `
@@ -4636,51 +4667,73 @@ export class DealsService {
           <p>When you are ready to make the deal active again, you can revive it from your LOI Deals dashboard. If the deal does sell please click Off Market and let us know the details of the sale.</p>
           ${emailButton('View LOI Deals', `${getFrontendUrl()}/seller/loi-deals`)}
         `;
-        await this.sendSellerDealEmail(
-          seller,
-          advisorSubject,
-          advisorContent,
-          [ILLUSTRATION_ATTACHMENT],
-          dealIdStr,
-        );
+        try {
+          await this.sendSellerDealEmail(
+            seller,
+            advisorSubject,
+            advisorContent,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        } catch (advisorErr) {
+          this.logger.error(`LOI advisor email failed for deal ${dealIdStr}: ${this.formatError(advisorErr)}`);
+        }
       }
 
-      // Email to Active Buyers (reuse already fetched buyer data)
-      for (const buyer of activeBuyers) {
-        const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
-          <p>The deal <strong>${dealDoc.title}</strong> has been paused by the advisor for Letter of Intent (LOI) negotiations.</p>
-          <p>This means the advisor is currently in advanced discussions with a potential buyer. The deal will remain in your Active deals, and you will be notified if it becomes available again.</p>
-          <p>In the meantime, feel free to explore other opportunities on CIM Amplify.</p>
-          ${emailButton('Browse Marketplace', `${getFrontendUrl()}/buyer/marketplace`)}
-        `);
-        await this.mailService.sendEmailWithLogging(
-          buyer.email,
-          'buyer',
-          buyerSubject,
-          buyerHtmlBody,
-          [ILLUSTRATION_ATTACHMENT],
-          dealIdStr,
-        );
-      }
+      // Per-recipient settle so a single failed send does not silently skip
+      // every remaining buyer in the loop.
+      const activeBuyerResults = await Promise.allSettled(
+        activeBuyers.map((buyer) => {
+          const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
+          const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
+            <p>The deal <strong>${dealDoc.title}</strong> has been paused by the advisor for Letter of Intent (LOI) negotiations.</p>
+            <p>This means the advisor is currently in advanced discussions with a potential buyer. The deal will remain in your Active deals, and you will be notified if it becomes available again.</p>
+            <p>In the meantime, feel free to explore other opportunities on CIM Amplify.</p>
+            ${emailButton('Browse Marketplace', `${getFrontendUrl()}/buyer/marketplace`)}
+          `);
+          return this.mailService.sendEmailWithLogging(
+            buyer.email,
+            'buyer',
+            buyerSubject,
+            buyerHtmlBody,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        }),
+      );
+      activeBuyerResults.forEach((result, idx) => {
+        if (result.status === 'rejected') {
+          this.logger.error(
+            `LOI active-buyer email failed for ${activeBuyers[idx]?.email || 'unknown'} (deal=${dealIdStr}): ${this.formatError(result.reason)}`,
+          );
+        }
+      });
 
-      // Email to Pending Buyers - give them FOMO to encourage faster response next time
-      for (const buyer of pendingBuyers) {
-        const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
-          <p>One of your Pending Deals has gone under LOI before you had a chance to respond. This deal will remain in your Pending Deals until it either becomes active again or is taken off market.</p>
-          <p>Please remember that you need to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
-          ${emailButton('See Pending Deals', `${getFrontendUrl()}/buyer/deals`)}
-        `);
-        await this.mailService.sendEmailWithLogging(
-          buyer.email,
-          'buyer',
-          buyerSubject,
-          buyerHtmlBody,
-          [ILLUSTRATION_ATTACHMENT],
-          dealIdStr,
-        );
-      }
+      const pendingBuyerResults = await Promise.allSettled(
+        pendingBuyers.map((buyer) => {
+          const buyerSubject = `Deal Update: ${dealDoc.title} - Paused for LOI`;
+          const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
+            <p>One of your Pending Deals has gone under LOI before you had a chance to respond. This deal will remain in your Pending Deals until it either becomes active again or is taken off market.</p>
+            <p>Please remember that you need to <strong>respond to Pending Deals as soon as possible</strong> so the Advisor who invited you to the deal knows your intentions.</p>
+            ${emailButton('See Pending Deals', `${getFrontendUrl()}/buyer/deals`)}
+          `);
+          return this.mailService.sendEmailWithLogging(
+            buyer.email,
+            'buyer',
+            buyerSubject,
+            buyerHtmlBody,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        }),
+      );
+      pendingBuyerResults.forEach((result, idx) => {
+        if (result.status === 'rejected') {
+          this.logger.error(
+            `LOI pending-buyer email failed for ${pendingBuyers[idx]?.email || 'unknown'} (deal=${dealIdStr}): ${this.formatError(result.reason)}`,
+          );
+        }
+      });
     } catch (emailError) {
       this.logger.error(`Failed sending LOI pause emails for deal ${dealId}`, this.formatError(emailError));
     }
@@ -4810,7 +4863,8 @@ export class DealsService {
            </ul>`
         : `<p><strong>Pending Buyers:</strong> None</p>`;
 
-      // Email to Project Owner
+      // Email to Project Owner. Isolated so a failure here cannot cancel the
+      // advisor/buyer notifications that follow.
       const ownerSubject = `Deal Revived from LOI: ${dealDoc.title}`;
       const ownerHtmlBody = genericEmailTemplate(ownerSubject, 'John', `
         <p>A deal has been revived from Letter of Intent (LOI) status and is now active again.</p>
@@ -4820,16 +4874,20 @@ export class DealsService {
         ${activeBuyersHtml}
         ${pendingBuyersHtml}
       `);
-      await this.mailService.sendEmailWithLogging(
-        getAdminNotificationEmail(),
-        'admin',
-        ownerSubject,
-        ownerHtmlBody,
-        [ILLUSTRATION_ATTACHMENT],
-        dealIdStr,
-      );
+      try {
+        await this.mailService.sendEmailWithLogging(
+          getAdminNotificationEmail(),
+          'admin',
+          ownerSubject,
+          ownerHtmlBody,
+          [ILLUSTRATION_ATTACHMENT],
+          dealIdStr,
+        );
+      } catch (ownerErr) {
+        this.logger.error(`LOI-revive owner email failed for deal ${dealIdStr}: ${this.formatError(ownerErr)}`);
+      }
 
-      // Email to Advisor (Seller)
+      // Email to Advisor (Seller).
       if (seller) {
         const advisorSubject = `Your Deal Is Now Active Again`;
         const advisorContent = `
@@ -4838,52 +4896,74 @@ export class DealsService {
           <p>You can manage your deal and view interested buyers from your dashboard.</p>
           ${emailButton('View Dashboard', `${getFrontendUrl()}/seller/dashboard`)}
         `;
-        await this.sendSellerDealEmail(
-          seller,
-          advisorSubject,
-          advisorContent,
-          [ILLUSTRATION_ATTACHMENT],
-          dealIdStr,
-        );
+        try {
+          await this.sendSellerDealEmail(
+            seller,
+            advisorSubject,
+            advisorContent,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        } catch (advisorErr) {
+          this.logger.error(`LOI-revive advisor email failed for deal ${dealIdStr}: ${this.formatError(advisorErr)}`);
+        }
       }
 
-      // Email to Active Buyers (reuse already fetched buyer data)
-      for (const buyer of activeBuyers) {
-        const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
-          <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
-          <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to engage with the advisor if you're still interested.</p>
-          <p>View the deal details and reach out to the advisor directly from your Active deals.</p>
-          ${emailButton('View Active Deals', `${getFrontendUrl()}/buyer/deals`)}
-        `);
-        await this.mailService.sendEmailWithLogging(
-          buyer.email,
-          'buyer',
-          buyerSubject,
-          buyerHtmlBody,
-          [ILLUSTRATION_ATTACHMENT],
-          dealIdStr,
-        );
-      }
+      // Per-recipient settle so a single failed send does not silently skip
+      // every remaining buyer in the loop.
+      const activeBuyerResults = await Promise.allSettled(
+        activeBuyers.map((buyer) => {
+          const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
+          const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
+            <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
+            <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to engage with the advisor if you're still interested.</p>
+            <p>View the deal details and reach out to the advisor directly from your Active deals.</p>
+            ${emailButton('View Active Deals', `${getFrontendUrl()}/buyer/deals`)}
+          `);
+          return this.mailService.sendEmailWithLogging(
+            buyer.email,
+            'buyer',
+            buyerSubject,
+            buyerHtmlBody,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        }),
+      );
+      activeBuyerResults.forEach((result, idx) => {
+        if (result.status === 'rejected') {
+          this.logger.error(
+            `LOI-revive active-buyer email failed for ${activeBuyers[idx]?.email || 'unknown'} (deal=${dealIdStr}): ${this.formatError(result.reason)}`,
+          );
+        }
+      });
 
-      // Email to Pending Buyers (reuse already fetched buyer data)
-      for (const buyer of pendingBuyers) {
-        const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
-        const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
-          <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
-          <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to continue your interest in this deal.</p>
-          <p>View your pending deals and respond to the invitation from the advisor.</p>
-          ${emailButton('View My Deals', `${getFrontendUrl()}/buyer/deals`)}
-        `);
-        await this.mailService.sendEmailWithLogging(
-          buyer.email,
-          'buyer',
-          buyerSubject,
-          buyerHtmlBody,
-          [ILLUSTRATION_ATTACHMENT],
-          dealIdStr,
-        );
-      }
+      const pendingBuyerResults = await Promise.allSettled(
+        pendingBuyers.map((buyer) => {
+          const buyerSubject = `Great News: ${dealDoc.title} Is Active Again!`;
+          const buyerHtmlBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), `
+            <p>The deal <strong>${dealDoc.title}</strong> is now active again on CIM Amplify!</p>
+            <p>The advisor has completed their LOI negotiations and the deal is available for new discussions. This is a great opportunity to continue your interest in this deal.</p>
+            <p>View your pending deals and respond to the invitation from the advisor.</p>
+            ${emailButton('View My Deals', `${getFrontendUrl()}/buyer/deals`)}
+          `);
+          return this.mailService.sendEmailWithLogging(
+            buyer.email,
+            'buyer',
+            buyerSubject,
+            buyerHtmlBody,
+            [ILLUSTRATION_ATTACHMENT],
+            dealIdStr,
+          );
+        }),
+      );
+      pendingBuyerResults.forEach((result, idx) => {
+        if (result.status === 'rejected') {
+          this.logger.error(
+            `LOI-revive pending-buyer email failed for ${pendingBuyers[idx]?.email || 'unknown'} (deal=${dealIdStr}): ${this.formatError(result.reason)}`,
+          );
+        }
+      });
     } catch (emailError) {
       this.logger.error(`Failed sending LOI revive emails for deal ${dealId}`, this.formatError(emailError));
     }

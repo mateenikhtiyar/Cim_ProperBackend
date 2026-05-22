@@ -704,15 +704,23 @@ export class MailService {
           `;
 
           const advisorEmailBody = genericEmailTemplate(advisorSubject, seller.fullName || 'Advisor', advisorContent);
-          await this.sendEmailWithLogging(
-            seller.email,
-            'seller',
-            advisorSubject,
-            advisorEmailBody,
-            [ILLUSTRATION_ATTACHMENT],
-            deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id),
-          );
-          followUpsSent++;
+          // Isolate the advisor send so a transient failure does not skip the
+          // matching buyer email or the introFollowUpSentAt marker further down.
+          try {
+            await this.sendEmailWithLogging(
+              seller.email,
+              'seller',
+              advisorSubject,
+              advisorEmailBody,
+              [ILLUSTRATION_ATTACHMENT],
+              deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id),
+            );
+            followUpsSent++;
+          } catch (advisorErr) {
+            this.logger.error(
+              `Intro follow-up advisor email failed for deal ${deal._id}, advisor ${seller.email}: ${advisorErr instanceof Error ? advisorErr.message : String(advisorErr)}`,
+            );
+          }
 
           const buyerSubject = `Follow Up: Have you heard from ${seller.fullName} regarding ${dealTitle}?`;
           const buyerContent = `
@@ -738,15 +746,21 @@ export class MailService {
           `;
 
           const buyerEmailBody = genericEmailTemplate(buyerSubject, buyer.fullName || 'Buyer', buyerContent);
-          await this.sendEmailWithLogging(
-            buyer.email,
-            'buyer',
-            buyerSubject,
-            buyerEmailBody,
-            [ILLUSTRATION_ATTACHMENT],
-            deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id),
-          );
-          followUpsSent++;
+          try {
+            await this.sendEmailWithLogging(
+              buyer.email,
+              'buyer',
+              buyerSubject,
+              buyerEmailBody,
+              [ILLUSTRATION_ATTACHMENT],
+              deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id),
+            );
+            followUpsSent++;
+          } catch (buyerErr) {
+            this.logger.error(
+              `Intro follow-up buyer email failed for deal ${deal._id}, buyer ${buyer.email}: ${buyerErr instanceof Error ? buyerErr.message : String(buyerErr)}`,
+            );
+          }
 
           if (deal.invitationStatus instanceof Map) {
             const entry = deal.invitationStatus.get(buyerId);

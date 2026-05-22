@@ -597,14 +597,25 @@ export class CronService {
           `;
 
           const advisorEmailBody = genericEmailTemplate(advisorSubject, getFirstName(seller.fullName), advisorContent);
-          await this.mailService.sendEmailWithLogging(
-            seller.email,
-            'seller',
-            advisorSubject,
-            advisorEmailBody,
-            [ILLUSTRATION_ATTACHMENT],
-            (deal._id instanceof Types.ObjectId) ? deal._id.toHexString() : String(deal._id),
-          );
+          // Isolate the advisor send so a transient failure does not skip the
+          // matching buyer email or the introFollowUpSentAt marker. Without this,
+          // the 3-4 day window would move past on the next cron run and the
+          // follow-up is lost entirely.
+          try {
+            await this.mailService.sendEmailWithLogging(
+              seller.email,
+              'seller',
+              advisorSubject,
+              advisorEmailBody,
+              [ILLUSTRATION_ATTACHMENT],
+              (deal._id instanceof Types.ObjectId) ? deal._id.toHexString() : String(deal._id),
+            );
+          } catch (advisorErr) {
+            this.logger.error(
+              `Intro follow-up advisor email failed for deal ${deal._id}, advisor ${seller.email}`,
+              this.formatError(advisorErr),
+            );
+          }
 
           // Email to Buyer: Did you hear from the advisor?
           const buyerSubject = `Follow Up: Have you heard from ${seller.fullName} regarding ${dealTitle}?`;
@@ -631,14 +642,21 @@ export class CronService {
           `;
 
           const buyerEmailBody = genericEmailTemplate(buyerSubject, getFirstName(buyer.fullName), buyerContent);
-          await this.mailService.sendEmailWithLogging(
-            buyer.email,
-            'buyer',
-            buyerSubject,
-            buyerEmailBody,
-            [ILLUSTRATION_ATTACHMENT],
-            (deal._id instanceof Types.ObjectId) ? deal._id.toHexString() : String(deal._id),
-          );
+          try {
+            await this.mailService.sendEmailWithLogging(
+              buyer.email,
+              'buyer',
+              buyerSubject,
+              buyerEmailBody,
+              [ILLUSTRATION_ATTACHMENT],
+              (deal._id instanceof Types.ObjectId) ? deal._id.toHexString() : String(deal._id),
+            );
+          } catch (buyerErr) {
+            this.logger.error(
+              `Intro follow-up buyer email failed for deal ${deal._id}, buyer ${buyer.email}`,
+              this.formatError(buyerErr),
+            );
+          }
 
           // Mark follow-up as sent
           if (deal.invitationStatus instanceof Map) {
