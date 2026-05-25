@@ -13,6 +13,37 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto'
 import { ResetPasswordDto } from './dto/reset-password.dto'
 import { Response } from 'express';
 import { getFrontendUrl } from '../common/frontend-url';
+import { getClientThrottleTracker } from '../common/throttle-tracker';
+
+const ONE_HOUR_MS = 60 * 60 * 1000
+const AUTH_ENDPOINT_LIMIT_PER_MINUTE = 10000
+const PASSWORD_RESET_EMAIL_LIMIT_PER_HOUR = 50
+const PASSWORD_RESET_CLIENT_LIMIT_PER_HOUR = 5000
+
+const getForgotPasswordThrottleTracker = (req: Record<string, any>): string => {
+  const email = req.body?.email
+  if (typeof email === 'string') {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (normalizedEmail) {
+      return `email:${normalizedEmail}`
+    }
+  }
+
+  return `ip:${getClientThrottleTracker(req)}`
+}
+
+const forgotPasswordThrottle = {
+  default: {
+    limit: PASSWORD_RESET_EMAIL_LIMIT_PER_HOUR,
+    ttl: ONE_HOUR_MS,
+    getTracker: getForgotPasswordThrottleTracker,
+  },
+  long: {
+    limit: PASSWORD_RESET_CLIENT_LIMIT_PER_HOUR,
+    ttl: ONE_HOUR_MS,
+    getTracker: getClientThrottleTracker,
+  },
+}
 
 
 
@@ -23,7 +54,7 @@ export class AuthController {
 
   @UseGuards(LocalAuthGuard)
   @Post('login')
-  @Throttle({ default: { limit: 1000, ttl: 60000 } })
+  @Throttle({ default: { limit: AUTH_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @ApiOperation({ summary: 'Login a user' })
   @ApiBody({ type: LoginBuyerDto })
   @ApiResponse({ status: 200, description: 'User logged in successfully' })
@@ -34,7 +65,7 @@ export class AuthController {
 
   @UseGuards(LocalAuthGuard)
   @Post('admin/login')
-  @Throttle({ default: { limit: 1000, ttl: 60000 } })
+  @Throttle({ default: { limit: AUTH_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @ApiOperation({ summary: 'Login an admin' })
   @ApiResponse({ status: 200, description: 'Admin logged in successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -45,7 +76,7 @@ export class AuthController {
 
   @Post('seller/login')
   @UseGuards(LocalAuthGuard)
-  @Throttle({ default: { limit: 1000, ttl: 60000 } })
+  @Throttle({ default: { limit: AUTH_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @ApiOperation({ summary: 'Login a seller' })
   @ApiResponse({ status: 200, description: 'Seller logged in successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -127,7 +158,7 @@ export class AuthController {
   }
 
   @Post('buyer/forgot-password')
-  @Throttle({ default: { limit: 3, ttl: 3600000 } })
+  @Throttle(forgotPasswordThrottle)
   forgotPasswordBuyer(@Body() body: { email: string }) {
     return this.authService.forgotPasswordBuyer(body.email)
   }
@@ -138,7 +169,7 @@ export class AuthController {
   }
   
   @Post('seller/forgot-password')
-  @Throttle({ default: { limit: 3, ttl: 3600000 } })
+  @Throttle(forgotPasswordThrottle)
   forgotPasswordSeller(@Body() body: { email: string }) {
     return this.authService.forgotPasswordSeller(body.email)
   }

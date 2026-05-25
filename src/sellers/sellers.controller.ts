@@ -28,6 +28,8 @@ import { ConfigService } from "@nestjs/config";
 import { UpdateSellerDto } from "./dto/update-seller.dto";
 import { Throttle } from "@nestjs/throttler";
 
+const SELLER_AUTH_ENDPOINT_LIMIT_PER_MINUTE = 10000
+
 @ApiTags("sellers")
 @Controller("sellers")
 export class SellersController {
@@ -41,7 +43,7 @@ export class SellersController {
   ) {}
 
   @Post('register')
-  @Throttle({ default: { limit: 1000, ttl: 60000 } })
+  @Throttle({ default: { limit: SELLER_AUTH_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @ApiOperation({ summary: 'Register a new seller' })
   @ApiResponse({ status: 201, description: 'Seller successfully registered' })
   @ApiResponse({ status: 400, description: 'Bad request' })

@@ -18,6 +18,15 @@ import { TeamModule } from './team/team.module';
 import { validateEnvironment } from "./config/env.validation";
 import { CronModule } from './cron/cron.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { getClientThrottleTracker } from "./common/throttle-tracker";
+
+const ONE_SECOND_MS = 1000
+const ONE_MINUTE_MS = 60 * ONE_SECOND_MS
+const ONE_HOUR_MS = 60 * ONE_MINUTE_MS
+
+const GLOBAL_THROTTLE_LIMIT_PER_SECOND = 5000
+const GLOBAL_THROTTLE_LIMIT_PER_MINUTE = 100000
+const GLOBAL_THROTTLE_LIMIT_PER_HOUR = 1000000
 
 @Module({
   imports: [
@@ -27,9 +36,9 @@ import { ScheduleModule } from '@nestjs/schedule';
       validate: validateEnvironment,
     }),
     ThrottlerModule.forRoot([
-      { name: "default", ttl: 60000, limit: 30000 },
-      { name: "short", ttl: 1000, limit: 500 },
-      { name: "long", ttl: 3600000, limit: 200000 },
+      { name: "default", ttl: ONE_MINUTE_MS, limit: GLOBAL_THROTTLE_LIMIT_PER_MINUTE, getTracker: getClientThrottleTracker },
+      { name: "short", ttl: ONE_SECOND_MS, limit: GLOBAL_THROTTLE_LIMIT_PER_SECOND, getTracker: getClientThrottleTracker },
+      { name: "long", ttl: ONE_HOUR_MS, limit: GLOBAL_THROTTLE_LIMIT_PER_HOUR, getTracker: getClientThrottleTracker },
     ]),
     MongooseModule.forRoot(process.env.MONGODB_URI as string, {
       maxPoolSize: 100,

@@ -13,6 +13,8 @@ import { SellersService } from "../sellers/sellers.service"
 import { UpdateSellerDto } from "../sellers/dto/update-seller.dto"
 import { Throttle } from "@nestjs/throttler"
 
+const ADMIN_ENDPOINT_LIMIT_PER_MINUTE = 10000
+
 interface RequestWithUser extends Request {
   user: {
     userId: string
@@ -37,7 +39,7 @@ export class AdminController {
   @Roles('admin')
   @Post('register')
   @ApiBearerAuth()
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: ADMIN_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @ApiOperation({ summary: 'Register a new admin (admin only)' })
   @ApiResponse({ status: 201, description: 'Admin successfully registered' })
   @ApiResponse({ status: 403, description: 'Forbidden - requires admin role' })

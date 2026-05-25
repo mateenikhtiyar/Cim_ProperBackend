@@ -27,6 +27,8 @@ import { Roles } from "../decorators/roles.decorator"
 import { UpdateBuyerDto } from "./dto/update-buyer.dto"
 import { Throttle } from "@nestjs/throttler"
 
+const BUYER_AUTH_ENDPOINT_LIMIT_PER_MINUTE = 10000
+
 interface RequestWithUser extends Request {
   user?: {
     userId: string
@@ -47,7 +49,7 @@ export class BuyersController {
   ) { }
 
   @Post("register")
-  @Throttle({ default: { limit: 1000, ttl: 60000 } })
+  @Throttle({ default: { limit: BUYER_AUTH_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @ApiOperation({ summary: "Register a new buyer" })
   @ApiResponse({ status: 201, description: "Buyer successfully registered" })
   @ApiResponse({ status: 409, description: "Email already exists" })
@@ -74,7 +76,7 @@ export class BuyersController {
 
   @UseGuards(LocalAuthGuard)
   @Post('login')
-  @Throttle({ default: { limit: 1000, ttl: 60000 } })
+  @Throttle({ default: { limit: BUYER_AUTH_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @ApiOperation({ summary: 'Login a buyer' })
   @ApiResponse({ status: 200, description: 'Buyer successfully logged in' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })

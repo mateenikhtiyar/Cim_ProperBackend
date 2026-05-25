@@ -36,6 +36,8 @@ import { Express } from "express"
 import { Response } from 'express'
 import { Throttle } from "@nestjs/throttler"
 
+const PUBLIC_LINK_ENDPOINT_LIMIT_PER_MINUTE = 10000
+
 interface RequestWithUser extends Request {
   user: {
     userId: string
@@ -1001,7 +1003,7 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
 
   // ── Public endpoint (no auth) for email-based deal actions ──
 
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: PUBLIC_LINK_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @Post("email-action/:token")
   @ApiOperation({ summary: "Handle deal action from email link (no login required)" })
   @ApiParam({ name: "token", description: "Unique action token from the email" })
@@ -1043,7 +1045,7 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     return this.dealsService.handleEmailAction(token, action, ip, userAgent, body || {})
   }
 
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Throttle({ default: { limit: PUBLIC_LINK_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @Get("email-action/:token/buyers")
   @ApiOperation({ summary: "List buyers eligible for LOI / Off Market selection from an email action token (no login required)" })
   @ApiParam({ name: "token", description: "Unique action token from the email" })
@@ -1058,7 +1060,7 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     return this.dealsService.getEverActiveBuyersByActionToken(token, ip)
   }
 
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @Throttle({ default: { limit: PUBLIC_LINK_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @Get("email-action/:token/status")
   @ApiOperation({ summary: "Check whether an email action token has already been consumed (no login required)" })
   @ApiParam({ name: "token", description: "Unique action token from the email" })
@@ -1073,7 +1075,7 @@ async getSellerDealsByStatus(@Param('sellerId') sellerId: string, @Query('status
     return this.dealsService.getEmailActionTokenStatus(token, ip)
   }
 
-  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @Throttle({ default: { limit: PUBLIC_LINK_ENDPOINT_LIMIT_PER_MINUTE, ttl: 60000 } })
   @Get("nda/:token")
   @ApiOperation({ summary: "Download the NDA document for a deal via a signed email link (no login required)" })
   @ApiParam({ name: "token", description: "Signed NDA download token from an introduction or invitation email" })
