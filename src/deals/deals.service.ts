@@ -1954,14 +1954,17 @@ export class DealsService {
       const dealIdStr =
         deal._id instanceof Types.ObjectId ? deal._id.toHexString() : String(deal._id);
 
-      // Await email sending before returning — on serverless (Vercel) fire-and-forget
-      // tasks are killed when the HTTP response is sent, so emails would never arrive.
-      try {
-        await this.sendBuyerInviteEmails(deal, inviteBuyerIds, dealIdStr);
-      } catch (err) {
+      // Fire-and-forget the invite emails so large buyer lists don't keep the HTTP
+      // connection open past the browser/nginx timeout (~30-60s). With 60+ buyers
+      // the batched send takes ~30-65s and the seller's browser was cancelling
+      // the request mid-flight, surfacing as a "NetworkError" toast even though
+      // the backend was still sending emails fine. Running on pm2 (long-lived
+      // Node process), so unlike on serverless this background work is not killed
+      // when the response returns. Individual send failures still go into the
+      // existing retry queue via sendEmailWithLogging.
+      void this.sendBuyerInviteEmails(deal, inviteBuyerIds, dealIdStr).catch((err) => {
         this.logger.error(`Email sending failed for deal ${dealIdStr}: ${err.message}`);
-        // Deal is already saved — don't fail the whole request over email errors
-      }
+      });
     }
 
     return deal;
