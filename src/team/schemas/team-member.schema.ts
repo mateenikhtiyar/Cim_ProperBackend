@@ -96,7 +96,8 @@ export class TeamMember {
 export const TeamMemberSchema = SchemaFactory.createForClass(TeamMember)
 
 TeamMemberSchema.index({ ownerId: 1, ownerType: 1 })
-TeamMemberSchema.index({ email: 1 }, { unique: true })
+// email uniqueness is already declared via @Prop({ unique: true }) on the field above;
+// a second explicit index here triggers Mongoose's "Duplicate schema index" warning.
 TeamMemberSchema.index({ isActive: 1 })
 
 TeamMemberSchema.pre("save", function (next) {
