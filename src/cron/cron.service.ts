@@ -147,7 +147,7 @@ export class CronService {
    * Monthly Buyer Report - 1st of every month at 8 AM
    * Rich HTML email with active deals, new pending, and old pending sections.
    */
-  @Cron('50 0 2 * *') // TEMP one-off resend for May 2026 report — REVERT to '0 8 1 * *'
+  @Cron('0 8 1 * *')
   async handleMonthlyBuyerReport() {
     this.logger.log('Running monthly buyer report cron job');
     const frontendUrl = getFrontendUrl();
@@ -278,7 +278,7 @@ export class CronService {
    * Monthly Advisor/Seller Report - 1st of every month at 9 AM
    * Rich HTML email with per-deal buyer tables and movement tracking.
    */
-  @Cron('52 0 2 * *') // TEMP one-off resend for May 2026 report — REVERT to '0 9 1 * *'
+  @Cron('0 9 1 * *')
   async handleMonthlySellerReport() {
     this.logger.log('Running monthly seller/advisor report cron job');
     const frontendUrl = getFrontendUrl();
